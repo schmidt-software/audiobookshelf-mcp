@@ -1121,6 +1121,143 @@ func TestRegisteredAuthorizeToolErrors(t *testing.T) {
 	})
 }
 
+func TestABSPATCH(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+	}))
+	defer server.Close()
+
+	_, err := absPATCH(context.Background(), server.URL, "test-token", "/me/progress/item-123", map[string]interface{}{
+		"currentTime": 60.0,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotMethod != http.MethodPatch {
+		t.Errorf("expected PATCH request, got %s", gotMethod)
+	}
+	if gotPath != "/me/progress/item-123" {
+		t.Errorf("expected path with item ID, got %s", gotPath)
+	}
+	if gotBody["currentTime"] != 60.0 {
+		t.Errorf("expected currentTime 60 in body, got %v", gotBody["currentTime"])
+	}
+}
+
+// TestUpdateProgressHandler is a regression test for a bug where update_progress
+// POSTed to /me/progress without the item ID, which ABS rejects with 404. ABS
+// requires PATCH /me/progress/{itemId}.
+func TestUpdateProgressHandler(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+
+	// Mirrors the update_progress handler registered in main().
+	handler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		baseURL, token, err := getABSConfig(request)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		itemID, err := request.RequireString("item_id")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		progress, err := request.RequireFloat("progress")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		payload := map[string]interface{}{
+			"currentTime": progress,
+		}
+
+		if duration := request.GetFloat("duration", 0); duration > 0 {
+			payload["duration"] = duration
+		}
+
+		if isFinished := request.GetBool("is_finished", false); isFinished {
+			payload["isFinished"] = true
+		}
+
+		path := fmt.Sprintf("/me/progress/%s", itemID)
+		if episodeID := request.GetString("episode_id", ""); episodeID != "" {
+			path = fmt.Sprintf("/me/progress/%s/%s", itemID, episodeID)
+		}
+
+		body, err := absPATCH(ctx, baseURL, token, path, payload)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(body)), nil
+	}
+
+	request := makeRequest(map[string]interface{}{
+		"base_url": baseURL,
+		"token":    "test-token",
+		"item_id":  "item-123",
+		"progress": 60.0,
+		"duration": 9596.754,
+	})
+
+	result, err := handler(context.Background(), request)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result returned error: %v", result)
+	}
+
+	if gotMethod != http.MethodPatch {
+		t.Errorf("expected PATCH request, got %s", gotMethod)
+	}
+	if gotPath != "/api/me/progress/item-123" {
+		t.Errorf("expected path '/api/me/progress/item-123', got %s", gotPath)
+	}
+	if _, ok := gotBody["libraryItemId"]; ok {
+		t.Errorf("libraryItemId should not be sent in body, item ID belongs in the URL path")
+	}
+	if gotBody["currentTime"] != 60.0 {
+		t.Errorf("expected currentTime 60 in body, got %v", gotBody["currentTime"])
+	}
+
+	// With an episode ID, the episode segment must be appended to the path.
+	gotPath = ""
+	episodeRequest := makeRequest(map[string]interface{}{
+		"base_url":   baseURL,
+		"token":      "test-token",
+		"item_id":    "item-123",
+		"episode_id": "ep-456",
+		"progress":   30.0,
+	})
+	if _, err := handler(context.Background(), episodeRequest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/me/progress/item-123/ep-456" {
+		t.Errorf("expected path '/api/me/progress/item-123/ep-456', got %s", gotPath)
+	}
+}
+
 func TestCreateLibraryHandler(t *testing.T) {
 	s := newMCPServer()
 
