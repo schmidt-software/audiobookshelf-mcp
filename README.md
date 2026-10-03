@@ -23,44 +23,9 @@ A Model Context Protocol (MCP) server that provides tools to interact with your 
 - An Audiobookshelf instance with API access
 - An API token from your Audiobookshelf instance
 
-### Recommended: Download Pre-built Release
+### Build from Source
 
-**The easiest way to install is to download a pre-built binary from the [latest release](https://github.com/your-username/abs-mcp/releases/latest).**
-
-| Platform | Architecture | Filename |
-|----------|-------------|----------|
-| macOS | Intel (x86_64) | `audiobookshelf-mcp_VERSION_darwin_amd64.tar.gz` |
-| macOS | Apple Silicon (ARM64) | `audiobookshelf-mcp_VERSION_darwin_arm64.tar.gz` |
-| Linux | 64-bit (x86_64) | `audiobookshelf-mcp_VERSION_linux_amd64.tar.gz` |
-| Linux | ARM64 | `audiobookshelf-mcp_VERSION_linux_arm64.tar.gz` |
-| Linux | 32-bit (x86) | `audiobookshelf-mcp_VERSION_linux_386.tar.gz` |
-| Windows | 64-bit (x86_64) | `audiobookshelf-mcp_VERSION_windows_amd64.tar.gz` |
-| Windows | ARM64 | `audiobookshelf-mcp_VERSION_windows_arm64.tar.gz` |
-| Windows | 32-bit (x86) | `audiobookshelf-mcp_VERSION_windows_386.tar.gz` |
-
-**Installation steps:**
-
-1. Download the appropriate archive for your platform from the releases page
-2. Extract the archive:
-   ```bash
-   tar -xzf audiobookshelf-mcp_VERSION_PLATFORM.tar.gz
-   ```
-3. Move the binary to a location in your PATH (optional but recommended):
-   ```bash
-   # macOS/Linux
-   sudo mv abs-mcp /usr/local/bin/
-
-   # Or to a user directory
-   mv abs-mcp ~/.local/bin/
-   ```
-4. Make it executable (macOS/Linux):
-   ```bash
-   chmod +x /usr/local/bin/abs-mcp
-   ```
-
-### Alternative: Build from Source
-
-If you prefer to build from source:
+Build from source or use Docker Compose below to install the server today.
 
 **Prerequisites:**
 - Go 1.25.2 or later
@@ -87,6 +52,30 @@ Example client configuration:
 ```json
 { "mcpServers": { "audiobookshelf": { "url": "http://localhost:8080/mcp" } } }
 ```
+
+### Pre-built Releases (once published)
+
+This repository does not currently publish release downloads. Once releases are available, download the appropriate archive for your platform from the [latest release](https://github.com/schmidt-software/audiobookshelf-mcp/releases/latest). Archive names may vary by release.
+
+**Installation steps for future release archives:**
+
+1. Download the appropriate archive for your platform from the releases page
+2. Extract the archive, replacing the filename with the archive you downloaded:
+   ```bash
+   tar -xzf <archive-name>.tar.gz
+   ```
+3. Move the binary to a location in your PATH (optional but recommended):
+   ```bash
+   # macOS/Linux
+   sudo mv abs-mcp /usr/local/bin/
+
+   # Or to a user directory
+   mv abs-mcp ~/.local/bin/
+   ```
+4. Make it executable (macOS/Linux):
+   ```bash
+   chmod +x /usr/local/bin/abs-mcp
+   ```
 
 ## Configuration
 
