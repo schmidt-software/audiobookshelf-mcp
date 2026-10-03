@@ -318,18 +318,27 @@ The AI assistant will use the appropriate MCP tools to fetch information and man
 
 ### Project Structure
 
-- `main.go` - Main server implementation
-- Helper functions for API authentication and request handling
-- MCP tool definitions and handlers
+- `main.go` - Server implementation: Audiobookshelf HTTP helpers (`absGET`, `absPOST`, `absPATCH`, …), handler factories, tool definitions in `newMCPServer()`, and transport selection in `main()`
+- `*_test.go` - Tests against mock Audiobookshelf servers (`httptest`), including tests that call tools through the registered MCP server
+- `Dockerfile`, `docker-compose.yml`, `.env.example` - Container image and Compose setup for the HTTP transport
+- `.github/workflows/main.yaml` - CI: runs tests and builds on pushes to `main` and on pull requests; publishes releases via GoReleaser on `v*` tags
+
+### Running Tests
+
+```bash
+go vet ./...
+go test ./...
+```
 
 ### Adding New Tools
 
 To add a new tool:
 
-1. Define the tool options using `mcp.NewTool()`
+1. Define the tool options in `newMCPServer()` using `mcp.NewTool()`
 2. Add authentication parameters with `withABSAuth()`
 3. Register the tool with `s.AddTool()`
-4. Use helper functions like `createSimpleGETHandler()` or `createGETByIDHandler()`
+4. Use helper functions like `createSimpleGETHandler()`, `createGETByIDHandler()`, `createGETByIDWithSubResourceHandler()`, or `createSimplePOSTHandler()`
+5. Add tests that call the registered tool (see `callRegisteredTool()` and `newRecordingServer()` in `main_test.go`) and document the tool in this README
 
 ## License
 
