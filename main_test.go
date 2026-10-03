@@ -1124,3 +1124,61 @@ func TestCreateLibraryHandler(t *testing.T) {
 		}
 	})
 }
+
+func TestRegisteredToolNames(t *testing.T) {
+	s := newMCPServer()
+	tools := s.ListTools()
+
+	expected := []string{
+		"libraries",
+		"library",
+		"create_library",
+		"item",
+		"author",
+		"me",
+		"sessions",
+		"session",
+		"podcasts",
+		"podcast",
+		"collections",
+		"collection",
+		"create_collection",
+		"add_to_collection",
+		"playlists",
+		"playlist",
+		"create_playlist",
+		"add_to_playlist",
+		"check_podcast_episodes",
+		"create_backup",
+		"update_progress",
+		"ping",
+		"healthcheck",
+		"status",
+		"users",
+		"users_online",
+		"user",
+		"series",
+		"author_image",
+		"backups",
+		"filesystem",
+		"authorize",
+		"tags",
+		"genres",
+	}
+
+	if len(tools) != len(expected) {
+		t.Fatalf("expected %d registered tools, got %d", len(expected), len(tools))
+	}
+	for _, name := range expected {
+		tool, ok := tools[name]
+		if !ok {
+			t.Fatalf("expected tool %q to be registered", name)
+		}
+		if tool.Tool.Name != name {
+			t.Fatalf("expected registered tool %q to report name %q, got %q", name, name, tool.Tool.Name)
+		}
+		if tool.Handler == nil {
+			t.Fatalf("expected tool %q to have a handler", name)
+		}
+	}
+}
