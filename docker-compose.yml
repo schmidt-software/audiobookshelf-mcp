@@ -1,0 +1,13 @@
+services:
+  abs-mcp:
+    build: .
+    image: audiobookshelf-mcp:latest
+    container_name: abs-mcp
+    restart: unless-stopped
+    environment:
+      ABS_BASE_URL: ${ABS_BASE_URL:?set ABS_BASE_URL}
+      ABS_API_KEY: ${ABS_API_KEY:?set ABS_API_KEY}
+      MCP_TRANSPORT: http
+      MCP_ADDR: ":8080"
+    ports:
+      - "${MCP_PORT:-8080}:8080"

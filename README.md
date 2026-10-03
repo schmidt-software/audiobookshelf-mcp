@@ -71,6 +71,23 @@ cd abs-mcp
 go build
 ```
 
+### Docker Compose
+
+The server can run as a container exposing the MCP streamable HTTP transport (`http://localhost:8080/mcp`).
+
+```bash
+cp .env.example .env   # set ABS_BASE_URL and ABS_API_KEY
+docker compose up -d --build
+```
+
+Transport settings (optional environment variables): `MCP_TRANSPORT` (`stdio` default outside Docker, `http` in the image), `MCP_ADDR` (default `:8080`), `MCP_ENDPOINT` (default `/mcp`), and `MCP_PORT` for the published host port in compose.
+
+Example client configuration:
+
+```json
+{ "mcpServers": { "audiobookshelf": { "url": "http://localhost:8080/mcp" } } }
+```
+
 ## Configuration
 
 The MCP server requires two pieces of configuration:

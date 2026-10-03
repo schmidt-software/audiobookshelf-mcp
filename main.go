@@ -861,7 +861,28 @@ func main() {
 	s.AddTool(genresTool, createSimpleGETHandler("/genres"))
 
 	// Start the server
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Printf("Server error: %v\n", err)
+	switch transport := strings.ToLower(os.Getenv("MCP_TRANSPORT")); transport {
+	case "", "stdio":
+		if err := server.ServeStdio(s); err != nil {
+			fmt.Printf("Server error: %v\n", err)
+		}
+	case "http":
+		addr := os.Getenv("MCP_ADDR")
+		if addr == "" {
+			addr = ":8080"
+		}
+		endpoint := os.Getenv("MCP_ENDPOINT")
+		if endpoint == "" {
+			endpoint = "/mcp"
+		}
+		httpServer := server.NewStreamableHTTPServer(s, server.WithEndpointPath(endpoint))
+		fmt.Fprintf(os.Stderr, "Listening on %s%s\n", addr, endpoint)
+		if err := httpServer.Start(addr); err != nil {
+			fmt.Printf("Server error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown MCP_TRANSPORT %q (use stdio or http)\n", transport)
+		os.Exit(1)
 	}
 }
