@@ -491,6 +491,39 @@ func absPATCH(ctx context.Context, baseURL, token, path string, payload interfac
 	return body, nil
 }
 
+func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	baseURL, token, err := getABSConfig(request)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if request.GetBool("feed", false) {
+		rssFeed, err := request.RequireString("rss_feed")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		body, err := absPOST(ctx, baseURL, token, "/podcasts/feed", map[string]interface{}{"rssFeed": rssFeed})
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(body)), nil
+	}
+
+	path := "/podcasts"
+	if request.GetBool("opml", false) {
+		path = "/podcasts/opml"
+	}
+
+	body, err := absGET(ctx, baseURL, token, path)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	return mcp.NewToolResultText(string(body)), nil
+}
+
 func handleCheckPodcastEpisodes(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	baseURL, token, err := getABSConfig(request)
 	if err != nil {
@@ -600,8 +633,9 @@ func newMCPServer() *server.MCPServer {
 
 	// Podcasts tools
 	podcastsOpts := append(withABSAuth(),
-		mcp.WithDescription("List all podcasts, or fetch podcast-related resources"),
-		mcp.WithBoolean("feed", mcp.Description("Get podcast RSS feed")),
+		mcp.WithDescription("List all podcasts, fetch RSS feed metadata, or fetch podcast-related resources"),
+		mcp.WithBoolean("feed", mcp.Description("Fetch podcast feed metadata using POST /podcasts/feed")),
+		mcp.WithString("rss_feed", mcp.Description("RSS feed URL (required when feed is true)")),
 		mcp.WithBoolean("opml", mcp.Description("Get podcast OPML export")),
 	)
 	podcastsTool := mcp.NewTool("podcasts", podcastsOpts...)
@@ -853,27 +887,7 @@ func newMCPServer() *server.MCPServer {
 	s.AddTool(sessionTool, createGETByIDHandler("/sessions/%s", "session_id"))
 
 	// Add ABS Podcasts handlers
-	s.AddTool(podcastsTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		baseURL, token, err := getABSConfig(request)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		path := "/podcasts"
-
-		if request.GetBool("feed", false) {
-			path = "/podcasts/feed"
-		} else if request.GetBool("opml", false) {
-			path = "/podcasts/opml"
-		}
-
-		body, err := absGET(ctx, baseURL, token, path)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		return mcp.NewToolResultText(string(body)), nil
-	})
+	s.AddTool(podcastsTool, handlePodcasts)
 
 	s.AddTool(podcastTool, createPodcastHandler())
 
