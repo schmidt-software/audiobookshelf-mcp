@@ -958,137 +958,141 @@ func TestABSPOST(t *testing.T) {
 }
 
 func TestCreateLibraryHandler(t *testing.T) {
-	mockServer := setupMockABSServer()
-	defer mockServer.Close()
+	s := newMCPServer()
 
-	baseURL := strings.TrimSuffix(mockServer.URL, "/api")
-
-	tests := []struct {
-		name        string
-		params      map[string]interface{}
-		expectError bool
-		checkResult func(*mcp.CallToolResult) error
-	}{
-		{
-			name: "create library successfully",
-			params: map[string]interface{}{
-				"base_url":   baseURL,
-				"token":      "test-token",
-				"name":       "My Audiobooks",
-				"folders":    "/audiobooks,/more-audiobooks",
-				"icon":       "audiobooks",
-				"media_type": "book",
-			},
-			expectError: false,
-			checkResult: func(result *mcp.CallToolResult) error {
-				if len(result.Content) == 0 {
-					return fmt.Errorf("expected content, got empty")
-				}
-				// Check that the response contains the library name
-				content := result.Content[0]
-				if textContent, ok := content.(mcp.TextContent); ok {
-					if !strings.Contains(textContent.Text, "My Audiobooks") {
-						return fmt.Errorf("expected 'My Audiobooks' in response, got: %s", textContent.Text)
-					}
-				}
-				return nil
-			},
-		},
-		{
-			name: "missing required name parameter",
-			params: map[string]interface{}{
-				"base_url": baseURL,
-				"token":    "test-token",
-				"folders":  "/audiobooks",
-			},
-			expectError: true,
-		},
-		{
-			name: "missing required folders parameter",
-			params: map[string]interface{}{
-				"base_url": baseURL,
-				"token":    "test-token",
-				"name":     "My Library",
-			},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create a handler function that matches what's in main.go
-			handler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				baseURL, token, err := getABSConfig(request)
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-
-				name, err := request.RequireString("name")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-
-				foldersStr, err := request.RequireString("folders")
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-
-				folderPaths := strings.Split(foldersStr, ",")
-				folders := make([]map[string]interface{}, len(folderPaths))
-				for i, path := range folderPaths {
-					folders[i] = map[string]interface{}{
-						"fullPath": strings.TrimSpace(path),
-					}
-				}
-
-				payload := map[string]interface{}{
-					"name":    name,
-					"folders": folders,
-				}
-
-				if icon := request.GetString("icon", ""); icon != "" {
-					payload["icon"] = icon
-				}
-				if mediaType := request.GetString("media_type", ""); mediaType != "" {
-					payload["mediaType"] = mediaType
-				}
-				if provider := request.GetString("provider", ""); provider != "" {
-					payload["provider"] = provider
-				}
-
-				body, err := absPOST(ctx, baseURL, token, "/libraries", payload)
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-
-				return mcp.NewToolResultText(string(body)), nil
+	t.Run("create library successfully", func(t *testing.T) {
+		recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+			if !requireMethod(w, r, http.MethodPost) {
+				return
+			}
+			if r.URL.Path != "/api/libraries" {
+				http.NotFound(w, r)
+				return
 			}
 
-			request := makeRequest(tt.params)
-			result, err := handler(context.Background(), request)
-
-			if tt.expectError {
-				if err != nil || (result != nil && result.IsError) {
-					// Expected error
-					return
-				}
-				t.Error("expected error, got success")
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if result == nil {
-					t.Error("expected result, got nil")
-				}
-				if result.IsError {
-					t.Errorf("result returned error: %v", result)
-				}
-				if tt.checkResult != nil {
-					if err := tt.checkResult(result); err != nil {
-						t.Error(err)
-					}
-				}
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, "invalid json", http.StatusBadRequest)
+				return
 			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":      "new-lib-123",
+				"name":    payload["name"],
+				"folders": payload["folders"],
+			})
 		})
-	}
+		defer recorder.Close()
+
+		result := callRegisteredTool(t, s, "create_library", map[string]interface{}{
+			"base_url":   recorder.URL,
+			"token":      "test-token",
+			"name":       "My Audiobooks",
+			"folders":    "/audiobooks, /more-audiobooks",
+			"media_type": "book",
+			"icon":       "audiobooks",
+			"provider":   "audible",
+		})
+		if result.IsError {
+			t.Fatalf("result returned error: %v", result)
+		}
+		if len(result.Content) == 0 {
+			t.Fatal("expected content, got empty")
+		}
+		if textContent, ok := result.Content[0].(mcp.TextContent); ok {
+			if !strings.Contains(textContent.Text, "My Audiobooks") {
+				t.Fatalf("expected response to contain library name, got: %s", textContent.Text)
+			}
+		} else {
+			t.Fatalf("expected text content, got %T", result.Content[0])
+		}
+
+		recorded, ok := recorder.LastRequest()
+		if !ok {
+			t.Fatal("expected recorded request")
+		}
+		if recorded.Method != http.MethodPost {
+			t.Fatalf("expected POST request, got %s", recorded.Method)
+		}
+		if recorded.Path != "/api/libraries" {
+			t.Fatalf("expected /api/libraries path, got %s", recorded.Path)
+		}
+		if recorded.RawQuery != "" {
+			t.Fatalf("expected empty query, got %q", recorded.RawQuery)
+		}
+
+		var payload map[string]interface{}
+		if err := json.Unmarshal(recorded.Body, &payload); err != nil {
+			t.Fatalf("decode recorded payload: %v", err)
+		}
+		if payload["name"] != "My Audiobooks" {
+			t.Fatalf("expected name payload, got %#v", payload["name"])
+		}
+		if payload["mediaType"] != "book" {
+			t.Fatalf("expected mediaType book, got %#v", payload["mediaType"])
+		}
+		if payload["icon"] != "audiobooks" {
+			t.Fatalf("expected icon audiobooks, got %#v", payload["icon"])
+		}
+		if payload["provider"] != "audible" {
+			t.Fatalf("expected provider audible, got %#v", payload["provider"])
+		}
+		folders, ok := payload["folders"].([]interface{})
+		if !ok || len(folders) != 2 {
+			t.Fatalf("expected two folders, got %#v", payload["folders"])
+		}
+		for i, expected := range []string{"/audiobooks", "/more-audiobooks"} {
+			folder, ok := folders[i].(map[string]interface{})
+			if !ok {
+				t.Fatalf("folder %d has unexpected type %T", i, folders[i])
+			}
+			if folder["fullPath"] != expected {
+				t.Fatalf("expected folder %d fullPath %q, got %#v", i, expected, folder["fullPath"])
+			}
+		}
+	})
+
+	t.Run("missing required media_type parameter", func(t *testing.T) {
+		recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("server should not be called when media_type is missing")
+		})
+		defer recorder.Close()
+
+		result := callRegisteredTool(t, s, "create_library", map[string]interface{}{
+			"base_url": recorder.URL,
+			"token":    "test-token",
+			"name":     "My Library",
+			"folders":  "/audiobooks",
+		})
+		if !result.IsError {
+			t.Fatal("expected missing media_type to return a tool error")
+		}
+		if requests := recorder.Requests(); len(requests) != 0 {
+			t.Fatalf("expected no outbound request, got %d", len(requests))
+		}
+	})
+
+	t.Run("missing required name parameter", func(t *testing.T) {
+		result := callRegisteredTool(t, s, "create_library", map[string]interface{}{
+			"base_url":   "http://example.invalid",
+			"token":      "test-token",
+			"folders":    "/audiobooks",
+			"media_type": "book",
+		})
+		if !result.IsError {
+			t.Fatal("expected missing name to return a tool error")
+		}
+	})
+
+	t.Run("missing required folders parameter", func(t *testing.T) {
+		result := callRegisteredTool(t, s, "create_library", map[string]interface{}{
+			"base_url":   "http://example.invalid",
+			"token":      "test-token",
+			"name":       "My Library",
+			"media_type": "book",
+		})
+		if !result.IsError {
+			t.Fatal("expected missing folders to return a tool error")
+		}
+	})
 }
