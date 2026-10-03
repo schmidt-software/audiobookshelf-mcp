@@ -295,7 +295,20 @@ func createPodcastHandler() func(context.Context, mcp.CallToolRequest) (*mcp.Cal
 	}
 }
 
+type absResponse struct {
+	Body        []byte
+	ContentType string
+}
+
 func absGET(ctx context.Context, baseURL, token, path string) ([]byte, error) {
+	response, err := absGETRaw(ctx, baseURL, token, path)
+	if err != nil {
+		return nil, err
+	}
+	return response.Body, nil
+}
+
+func absGETRaw(ctx context.Context, baseURL, token, path string) (*absResponse, error) {
 	fullURL := strings.TrimSuffix(baseURL, "/") + path
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
@@ -323,7 +336,10 @@ func absGET(ctx context.Context, baseURL, token, path string) ([]byte, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	return body, nil
+	return &absResponse{
+		Body:        body,
+		ContentType: resp.Header.Get("Content-Type"),
+	}, nil
 }
 
 func absPOST(ctx context.Context, baseURL, token, path string, payload interface{}) ([]byte, error) {
