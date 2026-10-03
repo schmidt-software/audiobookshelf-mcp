@@ -200,6 +200,7 @@ Add this to your Claude Desktop configuration file:
 
 ### User
 
+- **authorize** - Get authorized user and server information
 - **me** - Get authenticated user information, or fetch specific user sub-resources:
   - `listening-sessions=true` - Get listening sessions for the user
   - `listening-stats=true` - Get listening statistics for the user

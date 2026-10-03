@@ -75,6 +75,23 @@ func createSimpleGETHandler(path string) func(context.Context, mcp.CallToolReque
 	}
 }
 
+// Helper to create a simple POST tool handler without a request body
+func createSimplePOSTHandler(path string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		baseURL, token, err := getABSConfig(request)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		body, err := absPOST(ctx, baseURL, token, path, nil)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(body)), nil
+	}
+}
+
 // Helper to create a GET handler for root-level endpoints (without /api prefix)
 func createRootGETHandler(path string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -854,7 +871,7 @@ func newMCPServer() *server.MCPServer {
 	s.AddTool(filesystemTool, createSimpleGETHandler("/filesystem"))
 
 	// Add Authorize handler
-	s.AddTool(authorizeTool, createSimpleGETHandler("/authorize"))
+	s.AddTool(authorizeTool, createSimplePOSTHandler("/authorize"))
 
 	// Add Tags and Genres handlers
 	s.AddTool(tagsTool, createSimpleGETHandler("/tags"))

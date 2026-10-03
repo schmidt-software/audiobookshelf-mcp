@@ -415,6 +415,11 @@ func setupMockABSServer() *httptest.Server {
 
 	// Authorize endpoint
 	mux.HandleFunc("/api/authorize", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"user":   map[string]string{"id": "user1"},
@@ -983,6 +988,137 @@ func TestABSPOST(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRegisteredAuthorizeToolUsesPOST(t *testing.T) {
+	s := newMCPServer()
+	tool := s.GetTool("authorize")
+	if tool == nil {
+		t.Fatal("authorize tool is not registered")
+	}
+	if _, ok := tool.Tool.InputSchema.Properties["base_url"]; !ok {
+		t.Fatal("authorize schema missing base_url property")
+	}
+	if _, ok := tool.Tool.InputSchema.Properties["token"]; !ok {
+		t.Fatal("authorize schema missing token property")
+	}
+	if len(tool.Tool.InputSchema.Required) != 0 {
+		t.Fatalf("expected authorize to have no required schema parameters, got %v", tool.Tool.InputSchema.Required)
+	}
+
+	recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodPost) {
+			return
+		}
+		if r.URL.Path != "/api/authorize" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"user":   map[string]string{"id": "user1"},
+			"server": map[string]string{"version": "2.0.0"},
+		})
+	})
+	defer recorder.Close()
+
+	resp, err := http.Get(recorder.URL + "/api/authorize")
+	if err != nil {
+		t.Fatalf("unexpected GET error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected GET /api/authorize to return 405, got %d", resp.StatusCode)
+	}
+
+	result := callRegisteredTool(t, s, "authorize", map[string]interface{}{
+		"base_url": recorder.URL,
+		"token":    "test-token",
+	})
+	if result.IsError {
+		t.Fatalf("result returned error: %v", result)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected content, got empty")
+	}
+	content, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, `"user"`) || !strings.Contains(content.Text, `"server"`) {
+		t.Fatalf("expected authorize response, got: %s", content.Text)
+	}
+
+	recorded, ok := recorder.LastRequest()
+	if !ok {
+		t.Fatal("expected recorded request")
+	}
+	if recorded.Method != http.MethodPost {
+		t.Fatalf("expected POST request, got %s", recorded.Method)
+	}
+	if recorded.Path != "/api/authorize" {
+		t.Fatalf("expected /api/authorize path, got %s", recorded.Path)
+	}
+	if recorded.RawQuery != "" {
+		t.Fatalf("expected empty query, got %q", recorded.RawQuery)
+	}
+	if len(recorded.Body) != 0 {
+		t.Fatalf("expected empty request body, got %q", string(recorded.Body))
+	}
+}
+
+func TestRegisteredAuthorizeToolErrors(t *testing.T) {
+	s := newMCPServer()
+
+	t.Run("missing config returns tool error without request", func(t *testing.T) {
+		recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		})
+		defer recorder.Close()
+
+		result := callRegisteredTool(t, s, "authorize", map[string]interface{}{
+			"token": "test-token",
+		})
+		if !result.IsError {
+			t.Fatal("expected missing base_url to return a tool error")
+		}
+		if requests := recorder.Requests(); len(requests) != 0 {
+			t.Fatalf("expected no requests, got %d", len(requests))
+		}
+	})
+
+	t.Run("ABS non-2xx returns tool error", func(t *testing.T) {
+		recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+			if !requireMethod(w, r, http.MethodPost) {
+				return
+			}
+			if r.URL.Path != "/api/authorize" {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, "denied", http.StatusUnauthorized)
+		})
+		defer recorder.Close()
+
+		result := callRegisteredTool(t, s, "authorize", map[string]interface{}{
+			"base_url": recorder.URL,
+			"token":    "test-token",
+		})
+		if !result.IsError {
+			t.Fatal("expected non-2xx response to return a tool error")
+		}
+
+		recorded, ok := recorder.LastRequest()
+		if !ok {
+			t.Fatal("expected recorded request")
+		}
+		if recorded.Method != http.MethodPost {
+			t.Fatalf("expected POST request, got %s", recorded.Method)
+		}
+		if recorded.Path != "/api/authorize" {
+			t.Fatalf("expected /api/authorize path, got %s", recorded.Path)
+		}
+	})
 }
 
 func TestCreateLibraryHandler(t *testing.T) {
