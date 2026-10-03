@@ -229,7 +229,7 @@ Add this to your Claude Desktop configuration file:
 
 - **update_progress** - Update listening progress for a media item
   - Required: `item_id`, `progress` (in seconds)
-  - Optional: `duration` (in seconds), `is_finished` (boolean), `episode_id` (for podcasts)
+  - Optional: `duration` (in seconds), `is_finished` (boolean; sends true or false when provided), `episode_id` (for podcasts)
 
 ### Backups
 

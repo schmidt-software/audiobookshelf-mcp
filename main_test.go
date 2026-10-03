@@ -1121,6 +1121,394 @@ func TestRegisteredAuthorizeToolErrors(t *testing.T) {
 	})
 }
 
+func TestABSPATCH(t *testing.T) {
+	t.Run("successful PATCH with payload", func(t *testing.T) {
+		var gotMethod, gotPath string
+		var gotBody map[string]interface{}
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod = r.Method
+			gotPath = r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+		}))
+		defer server.Close()
+
+		_, err := absPATCH(context.Background(), server.URL, "test-token", "/me/progress/item-123", map[string]interface{}{
+			"currentTime": 60.0,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if gotMethod != http.MethodPatch {
+			t.Errorf("expected PATCH request, got %s", gotMethod)
+		}
+		if gotPath != "/me/progress/item-123" {
+			t.Errorf("expected path with item ID, got %s", gotPath)
+		}
+		if gotBody["currentTime"] != 60.0 {
+			t.Errorf("expected currentTime 60 in body, got %v", gotBody["currentTime"])
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		_, err := absPATCH(context.Background(), "http://example.invalid", "test-token", "/me/progress/item-123", map[string]interface{}{
+			"bad": make(chan int),
+		})
+		if err == nil || !strings.Contains(err.Error(), "marshal payload") {
+			t.Fatalf("expected marshal payload error, got %v", err)
+		}
+	})
+
+	t.Run("build request error", func(t *testing.T) {
+		_, err := absPATCH(context.Background(), "%", "test-token", "/me/progress/item-123", map[string]interface{}{
+			"currentTime": 60.0,
+		})
+		if err == nil || !strings.Contains(err.Error(), "build request") {
+			t.Fatalf("expected build request error, got %v", err)
+		}
+	})
+
+	t.Run("transport error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		baseURL := server.URL
+		server.Close()
+
+		_, err := absPATCH(context.Background(), baseURL, "test-token", "/me/progress/item-123", map[string]interface{}{
+			"currentTime": 60.0,
+		})
+		if err == nil || !strings.Contains(err.Error(), "call ABS API") {
+			t.Fatalf("expected call ABS API error, got %v", err)
+		}
+	})
+
+	t.Run("non-2xx status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "bad progress", http.StatusBadRequest)
+		}))
+		defer server.Close()
+
+		_, err := absPATCH(context.Background(), server.URL, "test-token", "/me/progress/item-123", map[string]interface{}{
+			"currentTime": 60.0,
+		})
+		if err == nil || !strings.Contains(err.Error(), "ABS API returned 400 Bad Request") || !strings.Contains(err.Error(), "bad progress") {
+			t.Fatalf("expected non-2xx error with response body, got %v", err)
+		}
+	})
+
+	t.Run("read error", func(t *testing.T) {
+		oldClient := httpClient
+		httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       failingReadCloser{},
+				Header:     make(http.Header),
+			}, nil
+		})}
+		defer func() { httpClient = oldClient }()
+
+		_, err := absPATCH(context.Background(), "http://abs.example", "test-token", "/me/progress/item-123", map[string]interface{}{
+			"currentTime": 60.0,
+		})
+		if err == nil || !strings.Contains(err.Error(), "read response") {
+			t.Fatalf("expected read response error, got %v", err)
+		}
+	})
+}
+
+// TestUpdateProgressHandler exercises the registered update_progress MCP handler.
+func TestUpdateProgressHandler(t *testing.T) {
+	s := newMCPServer()
+
+	tests := []struct {
+		name             string
+		args             map[string]interface{}
+		expectedPath     string
+		expectedProgress float64
+		expectedFinished *bool
+	}{
+		{
+			name: "book progress omits isFinished when omitted",
+			args: map[string]interface{}{
+				"token":    "test-token",
+				"item_id":  "book-123",
+				"progress": 60.0,
+				"duration": 9596.754,
+			},
+			expectedPath:     "/api/me/progress/book-123",
+			expectedProgress: 60.0,
+		},
+		{
+			name: "episode progress uses episode path",
+			args: map[string]interface{}{
+				"token":      "test-token",
+				"item_id":    "podcast-123",
+				"episode_id": "episode-456",
+				"progress":   30.0,
+			},
+			expectedPath:     "/api/me/progress/podcast-123/episode-456",
+			expectedProgress: 30.0,
+		},
+		{
+			name: "sends isFinished true",
+			args: map[string]interface{}{
+				"token":       "test-token",
+				"item_id":     "book-true",
+				"progress":    42.0,
+				"is_finished": true,
+			},
+			expectedPath:     "/api/me/progress/book-true",
+			expectedProgress: 42.0,
+			expectedFinished: boolPtr(true),
+		},
+		{
+			name: "sends explicit isFinished false",
+			args: map[string]interface{}{
+				"token":       "test-token",
+				"item_id":     "book-false",
+				"progress":    24.0,
+				"is_finished": false,
+			},
+			expectedPath:     "/api/me/progress/book-false",
+			expectedProgress: 24.0,
+			expectedFinished: boolPtr(false),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+				if !requireMethod(w, r, http.MethodPatch) {
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+			})
+			defer recorder.Close()
+
+			params := make(map[string]interface{}, len(tt.args)+1)
+			for key, value := range tt.args {
+				params[key] = value
+			}
+			params["base_url"] = recorder.URL
+
+			result := callRegisteredTool(t, s, "update_progress", params)
+			if result.IsError {
+				t.Fatalf("result returned error: %v", result)
+			}
+
+			got, ok := recorder.LastRequest()
+			if !ok {
+				t.Fatal("expected recorded request")
+			}
+			if got.Method != http.MethodPatch {
+				t.Errorf("expected PATCH request, got %s", got.Method)
+			}
+			if got.Path != tt.expectedPath {
+				t.Errorf("expected path %q, got %q", tt.expectedPath, got.Path)
+			}
+			if got.RawQuery != "" {
+				t.Errorf("expected empty query, got %q", got.RawQuery)
+			}
+
+			var body map[string]interface{}
+			if err := json.Unmarshal(got.Body, &body); err != nil {
+				t.Fatalf("decode recorded body: %v", err)
+			}
+			if body["currentTime"] != tt.expectedProgress {
+				t.Errorf("expected currentTime %v in body, got %v", tt.expectedProgress, body["currentTime"])
+			}
+			if _, ok := body["libraryItemId"]; ok {
+				t.Errorf("libraryItemId should not be sent in body, item ID belongs in the URL path")
+			}
+			if _, ok := body["episodeId"]; ok {
+				t.Errorf("episodeId should not be sent in body, episode ID belongs in the URL path")
+			}
+
+			gotFinished, hasFinished := body["isFinished"]
+			if tt.expectedFinished == nil {
+				if hasFinished {
+					t.Errorf("isFinished should be omitted when is_finished is not supplied, got %v", gotFinished)
+				}
+				return
+			}
+			if !hasFinished {
+				t.Fatalf("expected isFinished %v in body, got no field", *tt.expectedFinished)
+			}
+			if gotFinished != *tt.expectedFinished {
+				t.Errorf("expected isFinished %v in body, got %v", *tt.expectedFinished, gotFinished)
+			}
+		})
+	}
+}
+
+func TestUpdateProgressSchema(t *testing.T) {
+	tool := newMCPServer().GetTool("update_progress")
+	if tool == nil {
+		t.Fatal("update_progress tool is not registered")
+	}
+
+	for _, name := range []string{"base_url", "token", "item_id", "progress", "duration", "is_finished", "episode_id"} {
+		if _, ok := tool.Tool.InputSchema.Properties[name]; !ok {
+			t.Fatalf("expected update_progress schema property %q", name)
+		}
+	}
+	for _, name := range []string{"item_id", "progress"} {
+		if !containsString(tool.Tool.InputSchema.Required, name) {
+			t.Fatalf("expected update_progress schema required parameter %q in %v", name, tool.Tool.InputSchema.Required)
+		}
+	}
+}
+
+func TestUpdateProgressHandlerErrors(t *testing.T) {
+	t.Setenv("ABS_BASE_URL", "")
+	t.Setenv("ABS_API_KEY", "")
+	s := newMCPServer()
+
+	t.Run("missing base_url fails before request", func(t *testing.T) {
+		result := callRegisteredTool(t, s, "update_progress", map[string]interface{}{
+			"token":    "test-token",
+			"item_id":  "book-123",
+			"progress": 60.0,
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result, got %v", result)
+		}
+	})
+
+	t.Run("missing token fails before request", func(t *testing.T) {
+		recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("validation should fail before sending a request")
+		})
+		defer recorder.Close()
+
+		result := callRegisteredTool(t, s, "update_progress", map[string]interface{}{
+			"base_url": recorder.URL,
+			"item_id":  "book-123",
+			"progress": 60.0,
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result, got %v", result)
+		}
+		if got := len(recorder.Requests()); got != 0 {
+			t.Fatalf("expected no requests, got %d", got)
+		}
+	})
+
+	validationTests := []struct {
+		name string
+		args map[string]interface{}
+	}{
+		{
+			name: "missing item_id",
+			args: map[string]interface{}{
+				"token":    "test-token",
+				"progress": 60.0,
+			},
+		},
+		{
+			name: "missing progress",
+			args: map[string]interface{}{
+				"token":   "test-token",
+				"item_id": "book-123",
+			},
+		},
+	}
+	for _, tt := range validationTests {
+		t.Run(tt.name+" fails before request", func(t *testing.T) {
+			recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+				t.Fatalf("validation should fail before sending a request")
+			})
+			defer recorder.Close()
+
+			params := make(map[string]interface{}, len(tt.args)+1)
+			for key, value := range tt.args {
+				params[key] = value
+			}
+			params["base_url"] = recorder.URL
+
+			result := callRegisteredTool(t, s, "update_progress", params)
+			if !result.IsError {
+				t.Fatalf("expected error result, got %v", result)
+			}
+			if got := len(recorder.Requests()); got != 0 {
+				t.Fatalf("expected no requests, got %d", got)
+			}
+		})
+	}
+
+	t.Run("non-2xx ABS response returns tool error", func(t *testing.T) {
+		recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+			if !requireMethod(w, r, http.MethodPatch) {
+				return
+			}
+			http.Error(w, "bad progress", http.StatusBadRequest)
+		})
+		defer recorder.Close()
+
+		result := callRegisteredTool(t, s, "update_progress", map[string]interface{}{
+			"base_url": recorder.URL,
+			"token":    "test-token",
+			"item_id":  "book-123",
+			"progress": 60.0,
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result, got %v", result)
+		}
+		if got := len(recorder.Requests()); got != 1 {
+			t.Fatalf("expected one request, got %d", got)
+		}
+	})
+
+	t.Run("transport error returns tool error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		baseURL := server.URL
+		server.Close()
+
+		result := callRegisteredTool(t, s, "update_progress", map[string]interface{}{
+			"base_url": baseURL,
+			"token":    "test-token",
+			"item_id":  "book-123",
+			"progress": 60.0,
+		})
+		if !result.IsError {
+			t.Fatalf("expected error result, got %v", result)
+		}
+	})
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type failingReadCloser struct{}
+
+func (failingReadCloser) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("read failed")
+}
+
+func (failingReadCloser) Close() error {
+	return nil
+}
+
 func TestCreateLibraryHandler(t *testing.T) {
 	s := newMCPServer()
 

@@ -243,6 +243,47 @@ func absPOST(ctx context.Context, baseURL, token, path string, payload interface
 	return body, nil
 }
 
+func absPATCH(ctx context.Context, baseURL, token, path string, payload interface{}) ([]byte, error) {
+	fullURL := strings.TrimSuffix(baseURL, "/") + path
+
+	var bodyReader io.Reader
+	if payload != nil {
+		jsonData, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload: %w", err)
+		}
+		bodyReader = bytes.NewBuffer(jsonData)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, fullURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call ABS API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ABS API returned %s: %s", resp.Status, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	return body, nil
+}
+
 func newMCPServer() *server.MCPServer {
 	// Create a new MCP server
 	s := server.NewMCPServer(
@@ -821,23 +862,23 @@ func newMCPServer() *server.MCPServer {
 		}
 
 		payload := map[string]interface{}{
-			"libraryItemId": itemID,
-			"currentTime":   progress,
+			"currentTime": progress,
 		}
 
 		if duration := request.GetFloat("duration", 0); duration > 0 {
 			payload["duration"] = duration
 		}
 
-		if isFinished := request.GetBool("is_finished", false); isFinished {
-			payload["isFinished"] = true
+		if _, ok := request.GetArguments()["is_finished"]; ok {
+			payload["isFinished"] = request.GetBool("is_finished", false)
 		}
 
+		path := fmt.Sprintf("/me/progress/%s", itemID)
 		if episodeID := request.GetString("episode_id", ""); episodeID != "" {
-			payload["episodeId"] = episodeID
+			path = fmt.Sprintf("/me/progress/%s/%s", itemID, episodeID)
 		}
 
-		body, err := absPOST(ctx, baseURL, token, "/me/progress", payload)
+		body, err := absPATCH(ctx, baseURL, token, path, payload)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
