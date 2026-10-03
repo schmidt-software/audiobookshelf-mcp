@@ -81,7 +81,7 @@ This repository does not currently publish release downloads. Once releases are 
 
 The MCP server requires two pieces of configuration:
 
-1. **ABS_BASE_URL** - The base URL of your Audiobookshelf instance (e.g., `https://abs.example.com`)
+1. **ABS_BASE_URL** - The server URL of your Audiobookshelf instance, without `/api` (e.g., `https://abs.example.com`, or `https://abs.example.com/abs` when served under a reverse-proxy base path)
 2. **ABS_API_KEY** - Your Audiobookshelf API token
 
 ### Getting Your API Token
@@ -97,7 +97,7 @@ The MCP server requires two pieces of configuration:
 You can set the configuration using environment variables:
 
 ```bash
-export ABS_BASE_URL="https://abs.example.com"
+export ABS_BASE_URL="https://abs.example.com"  # no /api suffix
 export ABS_API_KEY="your-api-token-here"
 ```
 
@@ -120,7 +120,7 @@ Alternatively, you can pass these as parameters when calling tools (see Tool Par
 - **Arguments**: (leave empty)
 - **Working Directory**: Any directory (e.g., `/Users/yourname/Downloads`)
 - **Environment Variables**:
-  - `ABS_BASE_URL` = `https://example.library.abs` (your Audiobookshelf URL)
+  - `ABS_BASE_URL` = `https://example.library.abs` (your Audiobookshelf URL, without `/api`)
   - `ABS_API_KEY` = `IM_A_LONG_STRING` (your API token)
 
 4. Click "Save" to add the server
@@ -237,7 +237,7 @@ Add this to your Claude Desktop configuration file:
 
 ## Tool Parameters
 
-All tools accept optional `base_url` and `token` parameters that override the environment variables:
+All tools accept optional `base_url` and `token` parameters that override the environment variables. Use the Audiobookshelf server URL without `/api`; a reverse-proxy base path such as `/abs` is supported:
 
 ```json
 {
