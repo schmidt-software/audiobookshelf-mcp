@@ -226,7 +226,7 @@ func absPOST(ctx context.Context, baseURL, token, path string, payload interface
 	return body, nil
 }
 
-func main() {
+func newMCPServer() *server.MCPServer {
 	// Create a new MCP server
 	s := server.NewMCPServer(
 		"Audiobookshelf MCP Server",
@@ -860,7 +860,12 @@ func main() {
 	s.AddTool(tagsTool, createSimpleGETHandler("/tags"))
 	s.AddTool(genresTool, createSimpleGETHandler("/genres"))
 
-	// Start the server
+	return s
+}
+
+func main() {
+	s := newMCPServer()
+
 	switch transport := strings.ToLower(os.Getenv("MCP_TRANSPORT")); transport {
 	case "", "stdio":
 		if err := server.ServeStdio(s); err != nil {
