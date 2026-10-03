@@ -10,126 +10,139 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func TestCheckPodcastEpisodesUsesSupportedRoute(t *testing.T) {
-	called := false
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		if r.Method != http.MethodGet {
-			t.Errorf("expected method %s, got %s", http.MethodGet, r.Method)
-		}
-		if r.URL.Path != "/api/podcasts/podcast-item/checknew" {
-			t.Errorf("expected path /api/podcasts/podcast-item/checknew, got %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("limit"); got != "7" {
-			t.Errorf("expected query limit=7, got %s", got)
-		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-	}))
-	defer testServer.Close()
+func TestPodcastHandlersUseSupportedRoutes(t *testing.T) {
+	tests := []struct {
+		name            string
+		handler         func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		params          map[string]interface{}
+		expectedMethod  string
+		expectedPath    string
+		expectedQuery   map[string]string
+		expectedPayload map[string]string
+	}{
+		{
+			name:           "list podcast library items",
+			handler:        handlePodcasts,
+			params:         map[string]interface{}{"library_id": "lib-podcasts"},
+			expectedMethod: http.MethodGet,
+			expectedPath:   "/api/libraries/lib-podcasts/items",
+		},
+		{
+			name:           "fetch podcast feed metadata",
+			handler:        handlePodcasts,
+			params:         map[string]interface{}{"feed": true, "rss_feed": "https://example.com/feed.xml"},
+			expectedMethod: http.MethodPost,
+			expectedPath:   "/api/podcasts/feed",
+			expectedPayload: map[string]string{
+				"rssFeed": "https://example.com/feed.xml",
+			},
+		},
+		{
+			name:           "parse opml text",
+			handler:        handlePodcasts,
+			params:         map[string]interface{}{"opml": true, "opml_text": "<opml></opml>"},
+			expectedMethod: http.MethodPost,
+			expectedPath:   "/api/podcasts/opml/parse",
+			expectedPayload: map[string]string{
+				"opmlText": "<opml></opml>",
+			},
+		},
+		{
+			name:           "get podcast library item details",
+			handler:        handlePodcast,
+			params:         map[string]interface{}{"podcast_id": "podcast-item"},
+			expectedMethod: http.MethodGet,
+			expectedPath:   "/api/items/podcast-item",
+		},
+		{
+			name:           "get podcast downloads",
+			handler:        handlePodcast,
+			params:         map[string]interface{}{"podcast_id": "podcast-item", "downloads": true},
+			expectedMethod: http.MethodGet,
+			expectedPath:   "/api/podcasts/podcast-item/downloads",
+		},
+		{
+			name:           "search podcast episodes keeps endpoint",
+			handler:        handlePodcast,
+			params:         map[string]interface{}{"podcast_id": "podcast-item", "search-episode": true, "title": "Pilot"},
+			expectedMethod: http.MethodGet,
+			expectedPath:   "/api/podcasts/podcast-item/search-episode",
+		},
+		{
+			name:           "get podcast episode",
+			handler:        handlePodcast,
+			params:         map[string]interface{}{"podcast_id": "podcast-item", "episode_id": "episode-1"},
+			expectedMethod: http.MethodGet,
+			expectedPath:   "/api/podcasts/podcast-item/episode/episode-1",
+		},
+		{
+			name:           "check podcast episodes",
+			handler:        handleCheckPodcastEpisodes,
+			params:         map[string]interface{}{"podcast_id": "podcast-item", "limit": 7},
+			expectedMethod: http.MethodGet,
+			expectedPath:   "/api/podcasts/podcast-item/checknew",
+			expectedQuery: map[string]string{
+				"limit": "7",
+			},
+		},
+	}
 
-	result, err := handleCheckPodcastEpisodes(context.Background(), makeRequest(map[string]interface{}{
-		"base_url":   testServer.URL,
-		"token":      "test-token",
-		"podcast_id": "podcast-item",
-		"limit":      7,
-	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected result, got nil")
-	}
-	if result.IsError {
-		t.Fatalf("result returned error: %v", result)
-	}
-	if !called {
-		t.Fatal("expected test server to be called")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
 
-var _ func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) = handleCheckPodcastEpisodes
+				if r.Method != tt.expectedMethod {
+					t.Errorf("expected method %s, got %s", tt.expectedMethod, r.Method)
+				}
+				if r.URL.Path != tt.expectedPath {
+					t.Errorf("expected path %s, got %s", tt.expectedPath, r.URL.Path)
+				}
+				for key, expected := range tt.expectedQuery {
+					if got := r.URL.Query().Get(key); got != expected {
+						t.Errorf("expected query %s=%s, got %s", key, expected, got)
+					}
+				}
 
-func TestPodcastsFeedUsesSupportedRoute(t *testing.T) {
-	called := false
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		if r.Method != http.MethodPost {
-			t.Errorf("expected method %s, got %s", http.MethodPost, r.Method)
-		}
-		if r.URL.Path != "/api/podcasts/feed" {
-			t.Errorf("expected path /api/podcasts/feed, got %s", r.URL.Path)
-		}
-		var payload map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("decode payload: %v", err)
-		}
-		if got := payload["rssFeed"]; got != "https://example.com/feed.xml" {
-			t.Errorf("expected rssFeed payload, got %q", got)
-		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-	}))
-	defer testServer.Close()
+				if tt.expectedPayload != nil {
+					var payload map[string]string
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Errorf("decode payload: %v", err)
+					}
+					for key, expected := range tt.expectedPayload {
+						if got := payload[key]; got != expected {
+							t.Errorf("expected payload %s=%q, got %q", key, expected, got)
+						}
+					}
+				}
 
-	result, err := handlePodcasts(context.Background(), makeRequest(map[string]interface{}{
-		"base_url": testServer.URL,
-		"token":    "test-token",
-		"feed":     true,
-		"rss_feed": "https://example.com/feed.xml",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected result, got nil")
-	}
-	if result.IsError {
-		t.Fatalf("result returned error: %v", result)
-	}
-	if !called {
-		t.Fatal("expected test server to be called")
-	}
-}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			}))
+			defer testServer.Close()
 
-func TestPodcastsOPMLUsesSupportedParseRoute(t *testing.T) {
-	called := false
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		if r.Method != http.MethodPost {
-			t.Errorf("expected method %s, got %s", http.MethodPost, r.Method)
-		}
-		if r.URL.Path != "/api/podcasts/opml/parse" {
-			t.Errorf("expected path /api/podcasts/opml/parse, got %s", r.URL.Path)
-		}
-		var payload map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("decode payload: %v", err)
-		}
-		if got := payload["opmlText"]; got != "<opml></opml>" {
-			t.Errorf("expected opmlText payload, got %q", got)
-		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-	}))
-	defer testServer.Close()
+			params := map[string]interface{}{
+				"base_url": testServer.URL,
+				"token":    "test-token",
+			}
+			for key, value := range tt.params {
+				params[key] = value
+			}
 
-	result, err := handlePodcasts(context.Background(), makeRequest(map[string]interface{}{
-		"base_url":  testServer.URL,
-		"token":     "test-token",
-		"opml":      true,
-		"opml_text": "<opml></opml>",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected result, got nil")
-	}
-	if result.IsError {
-		t.Fatalf("result returned error: %v", result)
-	}
-	if !called {
-		t.Fatal("expected test server to be called")
+			result, err := tt.handler(context.Background(), makeRequest(params))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result == nil {
+				t.Fatal("expected result, got nil")
+			}
+			if result.IsError {
+				t.Fatalf("result returned error: %v", result)
+			}
+			if !called {
+				t.Fatal("expected test server to be called")
+			}
+		})
 	}
 }

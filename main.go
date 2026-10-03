@@ -296,44 +296,6 @@ func createLibraryHandler() func(context.Context, mcp.CallToolRequest) (*mcp.Cal
 	}
 }
 
-func createPodcastHandler() func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		baseURL, token, err := getABSConfig(request)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		podcastID, err := request.RequireString("podcast_id")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		path := fmt.Sprintf("/podcasts/%s", podcastID)
-
-		if request.GetBool("downloads", false) {
-			path = fmt.Sprintf("/podcasts/%s/downloads", podcastID)
-		} else if request.GetBool("search-episode", false) {
-			title := strings.TrimSpace(request.GetString("title", ""))
-			if title == "" {
-				return mcp.NewToolResultError("title is required when search-episode is true"), nil
-			}
-
-			values := url.Values{}
-			values.Set("title", title)
-			path = fmt.Sprintf("/podcasts/%s/search-episode?%s", podcastID, values.Encode())
-		} else if episodeID := request.GetString("episode_id", ""); episodeID != "" {
-			path = fmt.Sprintf("/podcasts/%s/episode/%s", podcastID, episodeID)
-		}
-
-		body, err := absGET(ctx, baseURL, token, path)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		return mcp.NewToolResultText(string(body)), nil
-	}
-}
-
 type absResponse struct {
 	Body        []byte
 	ContentType string
@@ -525,7 +487,49 @@ func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultText(string(body)), nil
 	}
 
-	body, err := absGET(ctx, baseURL, token, "/podcasts")
+	libraryID, err := request.RequireString("library_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	body, err := absGET(ctx, baseURL, token, fmt.Sprintf("/libraries/%s/items", url.PathEscape(libraryID)))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	return mcp.NewToolResultText(string(body)), nil
+}
+
+func handlePodcast(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	baseURL, token, err := getABSConfig(request)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	podcastID, err := request.RequireString("podcast_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	escapedPodcastID := url.PathEscape(podcastID)
+	path := fmt.Sprintf("/items/%s", escapedPodcastID)
+
+	if request.GetBool("downloads", false) {
+		path = fmt.Sprintf("/podcasts/%s/downloads", escapedPodcastID)
+	} else if request.GetBool("search-episode", false) {
+		title := strings.TrimSpace(request.GetString("title", ""))
+		if title == "" {
+			return mcp.NewToolResultError("title is required when search-episode is true"), nil
+		}
+
+		values := url.Values{}
+		values.Set("title", title)
+		path = fmt.Sprintf("/podcasts/%s/search-episode?%s", escapedPodcastID, values.Encode())
+	} else if episodeID := request.GetString("episode_id", ""); episodeID != "" {
+		path = fmt.Sprintf("/podcasts/%s/episode/%s", escapedPodcastID, url.PathEscape(episodeID))
+	}
+
+	body, err := absGET(ctx, baseURL, token, path)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -642,7 +646,8 @@ func newMCPServer() *server.MCPServer {
 
 	// Podcasts tools
 	podcastsOpts := append(withABSAuth(),
-		mcp.WithDescription("List all podcasts, fetch RSS feed metadata, or fetch podcast-related resources"),
+		mcp.WithDescription("List podcast library items, fetch RSS feed metadata, or parse OPML text"),
+		mcp.WithString("library_id", mcp.Description("Podcast library ID to list items from (required unless feed or opml is true)")),
 		mcp.WithBoolean("feed", mcp.Description("Fetch podcast feed metadata using POST /podcasts/feed")),
 		mcp.WithString("rss_feed", mcp.Description("RSS feed URL (required when feed is true)")),
 		mcp.WithBoolean("opml", mcp.Description("Parse OPML text using POST /podcasts/opml/parse")),
@@ -651,8 +656,8 @@ func newMCPServer() *server.MCPServer {
 	podcastsTool := mcp.NewTool("podcasts", podcastsOpts...)
 
 	podcastOpts := append(withABSAuth(),
-		mcp.WithDescription("Retrieve a single podcast by ID, or fetch podcast sub-resources"),
-		mcp.WithString("podcast_id", mcp.Required(), mcp.Description("Podcast identifier to fetch")),
+		mcp.WithDescription("Retrieve a podcast library item by ID, or fetch podcast sub-resources"),
+		mcp.WithString("podcast_id", mcp.Required(), mcp.Description("Podcast library item identifier to fetch")),
 		mcp.WithBoolean("downloads", mcp.Description("Get downloads for the podcast")),
 		mcp.WithBoolean("search-episode", mcp.Description("Search for episodes in the podcast")),
 		mcp.WithString("title", mcp.Description("Episode title to search for when search-episode is true")),
@@ -898,8 +903,7 @@ func newMCPServer() *server.MCPServer {
 
 	// Add ABS Podcasts handlers
 	s.AddTool(podcastsTool, handlePodcasts)
-
-	s.AddTool(podcastTool, createPodcastHandler())
+	s.AddTool(podcastTool, handlePodcast)
 
 	// Add ABS Collections handlers
 	s.AddTool(collectionsTool, createSimpleGETHandler("/collections"))
