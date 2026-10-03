@@ -453,6 +453,17 @@ func absPATCH(ctx context.Context, baseURL, token, path string, payload interfac
 	return body, nil
 }
 
+func requireNonBlankString(request mcp.CallToolRequest, key string) (string, error) {
+	value, err := request.RequireString(key)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("required argument %q must not be blank", key)
+	}
+	return value, nil
+}
+
 func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	baseURL, token, err := getABSConfig(request)
 	if err != nil {
@@ -460,7 +471,7 @@ func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	}
 
 	if request.GetBool("feed", false) {
-		rssFeed, err := request.RequireString("rss_feed")
+		rssFeed, err := requireNonBlankString(request, "rss_feed")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -474,7 +485,7 @@ func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	}
 
 	if request.GetBool("opml", false) {
-		opmlText, err := request.RequireString("opml_text")
+		opmlText, err := requireNonBlankString(request, "opml_text")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -487,7 +498,7 @@ func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultText(string(body)), nil
 	}
 
-	libraryID, err := request.RequireString("library_id")
+	libraryID, err := requireNonBlankString(request, "library_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -506,7 +517,7 @@ func handlePodcast(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallT
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	podcastID, err := request.RequireString("podcast_id")
+	podcastID, err := requireNonBlankString(request, "podcast_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -543,7 +554,7 @@ func handleCheckPodcastEpisodes(ctx context.Context, request mcp.CallToolRequest
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	podcastID, err := request.RequireString("podcast_id")
+	podcastID, err := requireNonBlankString(request, "podcast_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

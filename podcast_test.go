@@ -146,3 +146,67 @@ func TestPodcastHandlersUseSupportedRoutes(t *testing.T) {
 		})
 	}
 }
+
+func TestPodcastHandlersRejectBlankRequiredParameters(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+		params  map[string]interface{}
+	}{
+		{
+			name:    "blank library id",
+			handler: handlePodcasts,
+			params:  map[string]interface{}{"library_id": "   "},
+		},
+		{
+			name:    "blank rss feed",
+			handler: handlePodcasts,
+			params:  map[string]interface{}{"feed": true, "rss_feed": ""},
+		},
+		{
+			name:    "blank opml text",
+			handler: handlePodcasts,
+			params:  map[string]interface{}{"opml": true, "opml_text": "\t"},
+		},
+		{
+			name:    "blank podcast id",
+			handler: handlePodcast,
+			params:  map[string]interface{}{"podcast_id": ""},
+		},
+		{
+			name:    "blank check podcast id",
+			handler: handleCheckPodcastEpisodes,
+			params:  map[string]interface{}{"podcast_id": "   "},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				t.Fatal("validation failure should not call ABS")
+			}))
+			defer testServer.Close()
+
+			params := map[string]interface{}{
+				"base_url": testServer.URL,
+				"token":    "test-token",
+			}
+			for key, value := range tt.params {
+				params[key] = value
+			}
+
+			result, err := tt.handler(context.Background(), makeRequest(params))
+			if err != nil {
+				t.Fatalf("unexpected protocol error: %v", err)
+			}
+			if result == nil || !result.IsError {
+				t.Fatalf("expected tool error for blank input, got %#v", result)
+			}
+			if called {
+				t.Fatal("expected no ABS request for blank input")
+			}
+		})
+	}
+}
