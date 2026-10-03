@@ -415,6 +415,11 @@ func setupMockABSServer() *httptest.Server {
 
 	// Authorize endpoint
 	mux.HandleFunc("/api/authorize", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"user":   map[string]string{"id": "user1"},
@@ -982,6 +987,48 @@ func TestABSPOST(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAuthorizeHandlerUsesPOST(t *testing.T) {
+	mockServer := setupMockABSServer()
+	defer mockServer.Close()
+
+	resp, err := http.Get(mockServer.URL + "/api/authorize")
+	if err != nil {
+		t.Fatalf("unexpected GET error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected GET /api/authorize to return 405, got %d", resp.StatusCode)
+	}
+
+	baseURL := strings.TrimSuffix(mockServer.URL, "/api")
+	handler := createSimplePOSTHandler("/authorize")
+	request := makeRequest(map[string]interface{}{
+		"base_url": baseURL,
+		"token":    "test-token",
+	})
+
+	result, err := handler(context.Background(), request)
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+	if result.IsError {
+		t.Fatalf("result returned error: %v", result)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected content, got empty")
+	}
+	content, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(content.Text, `"user"`) || !strings.Contains(content.Text, `"server"`) {
+		t.Fatalf("expected authorize response, got: %s", content.Text)
 	}
 }
 
