@@ -491,6 +491,32 @@ func absPATCH(ctx context.Context, baseURL, token, path string, payload interfac
 	return body, nil
 }
 
+func handleCheckPodcastEpisodes(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	baseURL, token, err := getABSConfig(request)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	podcastID, err := request.RequireString("podcast_id")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	path := fmt.Sprintf("/podcasts/%s/checknew", url.PathEscape(podcastID))
+	if limit := request.GetFloat("limit", 0); limit > 0 {
+		query := url.Values{}
+		query.Set("limit", strconv.Itoa(int(limit)))
+		path += "?" + query.Encode()
+	}
+
+	body, err := absGET(ctx, baseURL, token, path)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	return mcp.NewToolResultText(string(body)), nil
+}
+
 func newMCPServer() *server.MCPServer {
 	// Create a new MCP server
 	s := server.NewMCPServer(
@@ -644,7 +670,8 @@ func newMCPServer() *server.MCPServer {
 	// Podcast check new episodes
 	checkPodcastEpisodesOpts := append(withABSAuth(),
 		mcp.WithDescription("Check for new episodes for a podcast"),
-		mcp.WithString("podcast_id", mcp.Required(), mcp.Description("Podcast ID to check")),
+		mcp.WithString("podcast_id", mcp.Required(), mcp.Description("Podcast library item ID to check")),
+		mcp.WithNumber("limit", mcp.Description("Maximum number of new episodes to download (Audiobookshelf defaults to 3)")),
 	)
 	checkPodcastEpisodesTool := mcp.NewTool("check_podcast_episodes", checkPodcastEpisodesOpts...)
 
@@ -981,24 +1008,7 @@ func newMCPServer() *server.MCPServer {
 	})
 
 	// Add Podcast check episodes handler
-	s.AddTool(checkPodcastEpisodesTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		baseURL, token, err := getABSConfig(request)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		podcastID, err := request.RequireString("podcast_id")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		body, err := absPOST(ctx, baseURL, token, fmt.Sprintf("/podcasts/%s/check-new-episodes", podcastID), nil)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		return mcp.NewToolResultText(string(body)), nil
-	})
+	s.AddTool(checkPodcastEpisodesTool, handleCheckPodcastEpisodes)
 
 	// Add create backup handler
 	s.AddTool(createBackupTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
