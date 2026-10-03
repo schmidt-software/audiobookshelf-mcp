@@ -10,11 +10,14 @@ A Model Context Protocol (MCP) server that provides tools to interact with your 
 
 ## Features
 
-- List and retrieve libraries with optional sub-resources (items, authors)
-- Get individual items (audiobooks or podcasts)
-- Browse authors and their works
-- Access collections and playlists
-- Retrieve user information
+- List and retrieve libraries with optional sub-resources (items, authors, series, search, stats, …)
+- Get individual items (audiobooks or podcasts), including cover images as MCP image content
+- Browse authors (with author images), series, tags, and genres
+- Create and manage collections and playlists
+- Browse podcasts, fetch RSS feed metadata, parse OPML, and check for new episodes
+- Read and update listening progress
+- Inspect users, playback sessions, server status, backups, and filesystem paths
+- Run over stdio or the MCP streamable HTTP transport (Docker image included)
 
 ## Installation
 
@@ -180,6 +183,13 @@ Add this to your Claude Desktop configuration file:
 - **author** - Get a single author by ID
 - **author_image** - Get an author's image by ID as MCP image content
 
+### Series, Tags, and Genres
+
+- **series** - Get a single series by ID
+  - Required: `series_id`
+- **tags** - List all tags
+- **genres** - List all genres
+
 ### Collections
 
 - **collections** - List all collections
@@ -211,6 +221,15 @@ Add this to your Claude Desktop configuration file:
   - `progress_item_id=<id>` - Get progress for a specific library item
   - `progress_item_id=<id>` + `progress_episode_id=<id>` - Get progress for a specific episode
 
+### Users
+
+- **users** - List all users
+- **users_online** - List currently online users
+- **user** - Get a single user by ID, or fetch specific user sub-resources:
+  - Required: `user_id`
+  - `listening-sessions=true` - Get listening sessions for the user
+  - `listening-stats=true` - Get listening statistics for the user
+
 ### Sessions
 
 - **sessions** - List all playback sessions
@@ -239,7 +258,15 @@ Add this to your Claude Desktop configuration file:
 
 ### Backups
 
+- **backups** - List all server backups
 - **create_backup** - Create a server backup
+
+### Server
+
+- **ping** - Simple health check (`GET /ping`)
+- **healthcheck** - Server health verification (`GET /healthcheck`)
+- **status** - Server initialization status and configuration (`GET /status`)
+- **filesystem** - List filesystem paths available to the server
 
 ## Tool Parameters
 
