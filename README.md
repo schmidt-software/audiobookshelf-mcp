@@ -218,15 +218,18 @@ Add this to your Claude Desktop configuration file:
 
 ### Podcasts
 
-- **podcasts** - List all podcasts, or fetch podcast-related resources:
-  - `feed=true` - Get podcast RSS feed
-  - `opml=true` - Get podcast OPML export
-- **podcast** - Get a single podcast by ID, or fetch podcast sub-resources:
+- **podcasts** - List podcast library items, fetch feed metadata, or parse OPML text:
+  - `library_id=<id>` - Required for listing podcasts; lists items from a podcast library
+  - `feed=true`, `rss_feed=<url>` - Fetch podcast RSS feed metadata
+  - `opml=true`, `opml_text=<xml>` - Parse OPML text for feed URLs
+- **podcast** - Get a podcast library item by ID, or fetch podcast sub-resources:
+  - Required: `podcast_id` (the podcast library item ID)
   - `downloads=true` - Get downloads for the podcast
   - `search-episode=true` + `title=<text>` - Search for episodes in the podcast
   - `episode_id=<id>` - Get a specific episode by ID
 - **check_podcast_episodes** - Check for new episodes for a podcast
-  - Required: `podcast_id`
+  - Required: `podcast_id` (the podcast library item ID)
+  - Optional: `limit` (maximum number of new episodes to download; Audiobookshelf defaults to 3)
 
 ### Progress Tracking
 

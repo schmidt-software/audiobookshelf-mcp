@@ -397,7 +397,7 @@ func TestRegisteredPodcastSubResourcePaths(t *testing.T) {
 		params       map[string]interface{}
 		expectedPath string
 	}{
-		{name: "base podcast", params: map[string]interface{}{}, expectedPath: "/api/podcasts/podcast123"},
+		{name: "base podcast", params: map[string]interface{}{}, expectedPath: "/api/items/podcast123"},
 		{name: "downloads", params: map[string]interface{}{"downloads": true}, expectedPath: "/api/podcasts/podcast123/downloads"},
 		{name: "episode_id", params: map[string]interface{}{"episode_id": "episode456"}, expectedPath: "/api/podcasts/podcast123/episode/episode456"},
 		{name: "first sub-resource wins", params: map[string]interface{}{"downloads": true, "search-episode": true, "title": "ignored", "episode_id": "episode456"}, expectedPath: "/api/podcasts/podcast123/downloads"},
@@ -660,7 +660,7 @@ func TestPodcastSearchEpisodeHandler(t *testing.T) {
 				params["title"] = tt.title
 			}
 
-			result, err := createPodcastHandler()(context.Background(), makeRequest(params))
+			result, err := handlePodcast(context.Background(), makeRequest(params))
 			if err != nil {
 				t.Fatalf("unexpected handler error: %v", err)
 			}
