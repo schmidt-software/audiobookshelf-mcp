@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -156,6 +158,28 @@ func createGETByIDHandler(pathTemplate, idParamName string) func(context.Context
 		}
 
 		return mcp.NewToolResultText(string(body)), nil
+	}
+}
+
+// Helper to create a GET handler with an ID parameter that can return MCP image content.
+func createGETByIDImageHandler(pathTemplate, idParamName string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		baseURL, token, err := getABSConfig(request)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		id, err := request.RequireString(idParamName)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		response, err := absGETRaw(ctx, baseURL, token, fmt.Sprintf(pathTemplate, id))
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return newBinaryAwareToolResult(response), nil
 	}
 }
 
@@ -340,6 +364,34 @@ func absGETRaw(ctx context.Context, baseURL, token, path string) (*absResponse, 
 		Body:        body,
 		ContentType: resp.Header.Get("Content-Type"),
 	}, nil
+}
+
+func newBinaryAwareToolResult(response *absResponse) *mcp.CallToolResult {
+	mimeType := imageMIMEType(response.ContentType, response.Body)
+	if mimeType == "" {
+		return mcp.NewToolResultText(string(response.Body))
+	}
+
+	return mcp.NewToolResultImage("Image response", base64.StdEncoding.EncodeToString(response.Body), mimeType)
+}
+
+func imageMIMEType(contentType string, body []byte) string {
+	mimeType := strings.TrimSpace(contentType)
+	if mimeType != "" {
+		if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
+			mimeType = parsed
+		} else if beforeParams, _, ok := strings.Cut(mimeType, ";"); ok {
+			mimeType = strings.TrimSpace(beforeParams)
+		}
+	}
+	if mimeType == "" {
+		mimeType = http.DetectContentType(body)
+	}
+	mimeType = strings.ToLower(mimeType)
+	if !strings.HasPrefix(mimeType, "image/") {
+		return ""
+	}
+	return mimeType
 }
 
 func absPOST(ctx context.Context, baseURL, token, path string, payload interface{}) ([]byte, error) {
@@ -632,7 +684,7 @@ func newMCPServer() *server.MCPServer {
 
 	// Author image tool
 	authorImageOpts := append(withABSAuth(),
-		mcp.WithDescription("Retrieve author image by ID"),
+		mcp.WithDescription("Retrieve an author image by ID as MCP image content"),
 		mcp.WithString("author_id", mcp.Required(), mcp.Description("Author identifier")),
 	)
 	authorImageTool := mcp.NewTool("author_image", authorImageOpts...)
@@ -1007,7 +1059,7 @@ func newMCPServer() *server.MCPServer {
 	s.AddTool(seriesTool, createGETByIDHandler("/series/%s", "series_id"))
 
 	// Add Author image handler
-	s.AddTool(authorImageTool, createGETByIDHandler("/authors/%s/image", "author_id"))
+	s.AddTool(authorImageTool, createGETByIDImageHandler("/authors/%s/image", "author_id"))
 
 	// Add Backups handler
 	s.AddTool(backupsTool, createSimpleGETHandler("/backups"))
