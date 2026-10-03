@@ -508,6 +508,75 @@ func TestGetEnvOrParam(t *testing.T) {
 	}
 }
 
+func TestNormalizeABSBaseURL(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawBaseURL  string
+		expected    string
+		expectError bool
+	}{
+		{
+			name:       "plain server URL",
+			rawBaseURL: "https://abs.example.com",
+			expected:   "https://abs.example.com",
+		},
+		{
+			name:       "trailing slashes",
+			rawBaseURL: "https://abs.example.com///",
+			expected:   "https://abs.example.com",
+		},
+		{
+			name:       "api suffix",
+			rawBaseURL: "https://abs.example.com/api",
+			expected:   "https://abs.example.com",
+		},
+		{
+			name:       "api suffix with trailing slash",
+			rawBaseURL: "https://abs.example.com/api/",
+			expected:   "https://abs.example.com",
+		},
+		{
+			name:       "reverse proxy base path",
+			rawBaseURL: "https://abs.example.com/abs",
+			expected:   "https://abs.example.com/abs",
+		},
+		{
+			name:       "reverse proxy base path with api suffix",
+			rawBaseURL: "https://abs.example.com/abs/api",
+			expected:   "https://abs.example.com/abs",
+		},
+		{
+			name:       "trims whitespace",
+			rawBaseURL: "  https://abs.example.com/abs/api/  ",
+			expected:   "https://abs.example.com/abs",
+		},
+		{
+			name:        "invalid URL",
+			rawBaseURL:  "abs.example.com",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual, err := normalizeABSBaseURL(tt.rawBaseURL)
+
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if actual != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, actual)
+			}
+		})
+	}
+}
+
 func TestGetABSConfig(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -523,7 +592,14 @@ func TestGetABSConfig(t *testing.T) {
 				"base_url": "https://abs.example.com",
 				"token":    "test-token",
 			},
-			expectError: false,
+			expectedURL: "https://abs.example.com/api",
+		},
+		{
+			name: "valid params with api suffix",
+			params: map[string]interface{}{
+				"base_url": "https://abs.example.com/api/",
+				"token":    "test-token",
+			},
 			expectedURL: "https://abs.example.com/api",
 		},
 		{
@@ -531,7 +607,6 @@ func TestGetABSConfig(t *testing.T) {
 			params:      map[string]interface{}{},
 			envBaseURL:  "https://env.example.com",
 			envToken:    "env-token",
-			expectError: false,
 			expectedURL: "https://env.example.com/api",
 		},
 		{
@@ -548,18 +623,20 @@ func TestGetABSConfig(t *testing.T) {
 			},
 			expectError: true,
 		},
+		{
+			name: "invalid base_url",
+			params: map[string]interface{}{
+				"base_url": "abs.example.com",
+				"token":    "test-token",
+			},
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.envBaseURL != "" {
-				os.Setenv("ABS_BASE_URL", tt.envBaseURL)
-				defer os.Unsetenv("ABS_BASE_URL")
-			}
-			if tt.envToken != "" {
-				os.Setenv("ABS_API_KEY", tt.envToken)
-				defer os.Unsetenv("ABS_API_KEY")
-			}
+			t.Setenv("ABS_BASE_URL", tt.envBaseURL)
+			t.Setenv("ABS_API_KEY", tt.envToken)
 
 			request := makeRequest(tt.params)
 			baseURL, token, err := getABSConfig(request)
@@ -641,6 +718,47 @@ func TestABSGET(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAPISuffixRoutesAPIAndRootHandlers(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/libraries", "/ping":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	request := makeRequest(map[string]interface{}{
+		"base_url": server.URL + "/api/",
+		"token":    "test-token",
+	})
+
+	apiResult, err := createSimpleGETHandler("/libraries")(context.Background(), request)
+	if err != nil {
+		t.Fatalf("unexpected API handler error: %v", err)
+	}
+	if apiResult == nil || apiResult.IsError {
+		t.Fatalf("expected API handler success, got %#v", apiResult)
+	}
+
+	rootResult, err := createRootGETHandler("/ping")(context.Background(), request)
+	if err != nil {
+		t.Fatalf("unexpected root handler error: %v", err)
+	}
+	if rootResult == nil || rootResult.IsError {
+		t.Fatalf("expected root handler success, got %#v", rootResult)
+	}
+
+	expectedPaths := []string{"/api/libraries", "/ping"}
+	if strings.Join(paths, ",") != strings.Join(expectedPaths, ",") {
+		t.Fatalf("expected paths %v, got %v", expectedPaths, paths)
 	}
 }
 

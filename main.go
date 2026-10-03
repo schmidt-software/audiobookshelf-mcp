@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,7 +27,22 @@ func getEnvOrParam(paramValue, envKey string) string {
 	return os.Getenv(envKey)
 }
 
-func getABSConfig(request mcp.CallToolRequest) (baseURL, token string, err error) {
+func normalizeABSBaseURL(rawBaseURL string) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(rawBaseURL), "/")
+	baseURL = strings.TrimSuffix(baseURL, "/api")
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("base_url must be an absolute http(s) URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("base_url must use http or https")
+	}
+
+	return baseURL, nil
+}
+
+func getABSAuthConfig(request mcp.CallToolRequest) (baseURL, token string, err error) {
 	baseURLParam := request.GetString("base_url", "")
 	tokenParam := request.GetString("token", "")
 
@@ -40,17 +56,28 @@ func getABSConfig(request mcp.CallToolRequest) (baseURL, token string, err error
 		return "", "", fmt.Errorf("token parameter or ABS_API_KEY environment variable is required")
 	}
 
-	// Always append /api to the base URL
-	baseURL = fmt.Sprintf("%s/api", baseURL)
+	baseURL, err = normalizeABSBaseURL(baseURL)
+	if err != nil {
+		return "", "", err
+	}
 
 	return baseURL, token, nil
+}
+
+func getABSConfig(request mcp.CallToolRequest) (baseURL, token string, err error) {
+	baseURL, token, err = getABSAuthConfig(request)
+	if err != nil {
+		return "", "", err
+	}
+
+	return baseURL + "/api", token, nil
 }
 
 // Helper to add base_url and token parameters to a tool
 func withABSAuth() []mcp.ToolOption {
 	return []mcp.ToolOption{
 		mcp.WithString("base_url",
-			mcp.Description("Audiobookshelf base API URL, e.g. https://abs.example.com/api (defaults to ABS_BASE_URL env var)"),
+			mcp.Description("Audiobookshelf server URL without /api, e.g. https://abs.example.com or https://abs.example.com/abs (defaults to ABS_BASE_URL env var)"),
 		),
 		mcp.WithString("token",
 			mcp.Description("Bearer token used to authenticate with Audiobookshelf (defaults to ABS_API_KEY env var)"),
@@ -95,20 +122,11 @@ func createSimplePOSTHandler(path string) func(context.Context, mcp.CallToolRequ
 // Helper to create a GET handler for root-level endpoints (without /api prefix)
 func createRootGETHandler(path string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		baseURLParam := request.GetString("base_url", "")
-		tokenParam := request.GetString("token", "")
-
-		baseURL := getEnvOrParam(baseURLParam, "ABS_BASE_URL")
-		token := getEnvOrParam(tokenParam, "ABS_API_KEY")
-
-		if baseURL == "" {
-			return mcp.NewToolResultError("base_url parameter or ABS_BASE_URL environment variable is required"), nil
-		}
-		if token == "" {
-			return mcp.NewToolResultError("token parameter or ABS_API_KEY environment variable is required"), nil
+		baseURL, token, err := getABSAuthConfig(request)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		// Don't append /api for root-level endpoints
 		body, err := absGET(ctx, baseURL, token, path)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
