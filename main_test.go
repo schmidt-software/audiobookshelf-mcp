@@ -774,17 +774,13 @@ func TestEndpointHandlers(t *testing.T) {
 }
 
 func TestSubResourceHandlers(t *testing.T) {
-	mockServer := setupMockABSServer()
-	defer mockServer.Close()
-
-	baseURL := strings.TrimSuffix(mockServer.URL, "/api")
-
 	tests := []struct {
 		name           string
 		basePath       string
 		idParamName    string
 		subResources   []string
 		params         map[string]interface{}
+		expectedPath   string
 		expectedInPath string
 	}{
 		{
@@ -793,11 +789,11 @@ func TestSubResourceHandlers(t *testing.T) {
 			idParamName:  "library_id",
 			subResources: []string{"items", "authors", "series"},
 			params: map[string]interface{}{
-				"base_url":   baseURL,
 				"token":      "test-token",
 				"library_id": "lib123",
 				"items":      true,
 			},
+			expectedPath:   "/api/libraries/lib123/items",
 			expectedInPath: "items",
 		},
 		{
@@ -806,10 +802,10 @@ func TestSubResourceHandlers(t *testing.T) {
 			idParamName:  "library_id",
 			subResources: []string{"items", "authors"},
 			params: map[string]interface{}{
-				"base_url":   baseURL,
 				"token":      "test-token",
 				"library_id": "lib123",
 			},
+			expectedPath:   "/api/libraries/lib123",
 			expectedInPath: "lib123",
 		},
 		{
@@ -818,19 +814,36 @@ func TestSubResourceHandlers(t *testing.T) {
 			idParamName:  "user_id",
 			subResources: []string{"listening-sessions", "listening-stats"},
 			params: map[string]interface{}{
-				"base_url":           baseURL,
 				"token":              "test-token",
 				"user_id":            "user123",
 				"listening-sessions": true,
 			},
+			expectedPath:   "/api/users/user123/listening-sessions",
 			expectedInPath: "listening-sessions",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+				if !requireMethod(w, r, http.MethodGet) {
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"path": r.URL.Path,
+				})
+			})
+			defer recorder.Close()
+
+			params := make(map[string]interface{}, len(tt.params)+1)
+			for key, value := range tt.params {
+				params[key] = value
+			}
+			params["base_url"] = recorder.URL
+
 			handler := createGETByIDWithSubResourceHandler(tt.basePath, tt.idParamName, tt.subResources)
-			request := makeRequest(tt.params)
+			request := makeRequest(params)
 			result, err := handler(context.Background(), request)
 
 			if err != nil {
@@ -842,10 +855,25 @@ func TestSubResourceHandlers(t *testing.T) {
 			if result.IsError {
 				t.Errorf("result returned error: %v", result)
 			}
-
-			// Check that result contains expected data
 			if len(result.Content) == 0 {
 				t.Error("expected content, got empty")
+			}
+
+			recorded, ok := recorder.LastRequest()
+			if !ok {
+				t.Fatal("expected recorded request")
+			}
+			if recorded.Method != http.MethodGet {
+				t.Fatalf("expected GET request, got %s", recorded.Method)
+			}
+			if recorded.Path != tt.expectedPath {
+				t.Fatalf("expected path %q, got %q", tt.expectedPath, recorded.Path)
+			}
+			if !strings.Contains(recorded.Path, tt.expectedInPath) {
+				t.Fatalf("expected path %q to contain %q", recorded.Path, tt.expectedInPath)
+			}
+			if recorded.RawQuery != "" {
+				t.Fatalf("expected empty query, got %q", recorded.RawQuery)
 			}
 		})
 	}
