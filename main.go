@@ -185,6 +185,11 @@ func createGETByIDImageHandler(pathTemplate, idParamName string) func(context.Co
 
 // Helper to create a GET handler with ID and optional sub-resource
 func createGETByIDWithSubResourceHandler(basePath, idParamName string, subResources []string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return createGETByIDWithBinarySubResourceHandler(basePath, idParamName, subResources, nil)
+}
+
+// Helper to create a GET handler with ID and optional sub-resource, with optional binary image sub-resources.
+func createGETByIDWithBinarySubResourceHandler(basePath, idParamName string, subResources []string, binarySubResources map[string]bool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		baseURL, token, err := getABSConfig(request)
 		if err != nil {
@@ -198,11 +203,21 @@ func createGETByIDWithSubResourceHandler(basePath, idParamName string, subResour
 
 		// Build the path - check if any sub-resource is requested
 		path := fmt.Sprintf(basePath, id)
+		binaryResult := false
 		for _, subResource := range subResources {
 			if request.GetBool(subResource, false) {
 				path = fmt.Sprintf("%s/%s", path, subResource)
+				binaryResult = binarySubResources[subResource]
 				break // Only one sub-resource at a time
 			}
+		}
+
+		if binaryResult {
+			response, err := absGETRaw(ctx, baseURL, token, path)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return newBinaryAwareToolResult(response), nil
 		}
 
 		body, err := absGET(ctx, baseURL, token, path)
@@ -524,7 +539,7 @@ func newMCPServer() *server.MCPServer {
 	itemOpts := append(withABSAuth(),
 		mcp.WithDescription("Retrieve a single Audiobookshelf item (audiobook or podcast) by ID, optionally with sub-resources"),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item identifier to fetch")),
-		mcp.WithBoolean("cover", mcp.Description("Include cover image for the item")),
+		mcp.WithBoolean("cover", mcp.Description("Return the cover image for the item as MCP image content")),
 		mcp.WithBoolean("tone-object", mcp.Description("Include tone object for the item")),
 	)
 	itemTool := mcp.NewTool("item", itemOpts...)
@@ -765,10 +780,10 @@ func newMCPServer() *server.MCPServer {
 	})
 
 	// Add ABS Items handlers
-	s.AddTool(itemTool, createGETByIDWithSubResourceHandler("/items/%s", "item_id", []string{
+	s.AddTool(itemTool, createGETByIDWithBinarySubResourceHandler("/items/%s", "item_id", []string{
 		"cover",
 		"tone-object",
-	}))
+	}, map[string]bool{"cover": true}))
 
 	// Add ABS Authors handlers
 	s.AddTool(authorTool, createGETByIDHandler("/authors/%s", "author_id"))

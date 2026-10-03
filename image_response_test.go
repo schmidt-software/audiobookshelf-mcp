@@ -17,10 +17,15 @@ import (
 )
 
 func TestImageEndpointHandlersReturnImageContent(t *testing.T) {
+	pngBytes := testPNGBytes(t)
 	jpegBytes := testJPEGBytes(t)
 
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/items/item123/cover":
+			w.Header().Set("Content-Type", "image/png; charset=binary")
+			w.WriteHeader(http.StatusOK)
+			w.Write(pngBytes)
 		case "/api/authors/author123/image":
 			w.Header().Set("Content-Type", "image/jpeg")
 			w.WriteHeader(http.StatusOK)
@@ -40,6 +45,18 @@ func TestImageEndpointHandlersReturnImageContent(t *testing.T) {
 		mimeType string
 		body     []byte
 	}{
+		{
+			name:    "item cover returns PNG image content",
+			handler: createGETByIDWithBinarySubResourceHandler("/items/%s", "item_id", []string{"cover", "tone-object"}, map[string]bool{"cover": true}),
+			params: map[string]interface{}{
+				"base_url": baseURL,
+				"token":    "test-token",
+				"item_id":  "item123",
+				"cover":    true,
+			},
+			mimeType: "image/png",
+			body:     pngBytes,
+		},
 		{
 			name:    "author image returns JPEG image content",
 			handler: createGETByIDImageHandler("/authors/%s/image", "author_id"),
@@ -94,6 +111,16 @@ func TestImageEndpointHandlersReturnTextForNonImages(t *testing.T) {
 		params  map[string]interface{}
 	}{
 		{
+			name:    "item cover",
+			handler: createGETByIDWithBinarySubResourceHandler("/items/%s", "item_id", []string{"cover", "tone-object"}, map[string]bool{"cover": true}),
+			params: map[string]interface{}{
+				"base_url": baseURL,
+				"token":    "test-token",
+				"item_id":  "item123",
+				"cover":    true,
+			},
+		},
+		{
 			name:    "author image",
 			handler: createGETByIDImageHandler("/authors/%s/image", "author_id"),
 			params: map[string]interface{}{
@@ -134,6 +161,43 @@ func TestBinaryAwareResultDetectsImageMIMETypeFallback(t *testing.T) {
 	imageContent := requireImageContent(t, result)
 	if imageContent.MIMEType != "image/png" {
 		t.Fatalf("expected detected MIME type image/png, got %q", imageContent.MIMEType)
+	}
+}
+
+func TestItemJSONResponseStaysText(t *testing.T) {
+	jsonBody := `{"id":"item123","type":"book"}`
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/items/item123" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(jsonBody))
+	}))
+	defer testServer.Close()
+
+	baseURL := strings.TrimSuffix(testServer.URL, "/api")
+	result, err := createGETByIDWithBinarySubResourceHandler("/items/%s", "item_id", []string{"cover", "tone-object"}, map[string]bool{"cover": true})(context.Background(), makeRequest(map[string]interface{}{
+		"base_url": baseURL,
+		"token":    "test-token",
+		"item_id":  "item123",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil || result.IsError {
+		t.Fatalf("expected successful result, got %#v", result)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("expected one text content item, got %d", len(result.Content))
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if textContent.Text != jsonBody {
+		t.Fatalf("expected unchanged JSON text %q, got %q", jsonBody, textContent.Text)
 	}
 }
 
