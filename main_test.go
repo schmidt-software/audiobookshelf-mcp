@@ -762,6 +762,331 @@ func TestAPISuffixRoutesAPIAndRootHandlers(t *testing.T) {
 	}
 }
 
+func assertRegisteredABSAuthSchema(t *testing.T, s *server.MCPServer, toolName string) {
+	t.Helper()
+	registered := s.GetTool(toolName)
+	if registered == nil {
+		t.Fatalf("tool %q is not registered", toolName)
+	}
+
+	baseURLProperty, ok := registered.Tool.InputSchema.Properties["base_url"]
+	if !ok {
+		t.Fatalf("tool %q input schema missing base_url", toolName)
+	}
+	baseURLSchema, ok := baseURLProperty.(map[string]interface{})
+	if !ok {
+		t.Fatalf("tool %q base_url schema has unexpected type %T", toolName, baseURLProperty)
+	}
+	if baseURLSchema["type"] != "string" {
+		t.Fatalf("tool %q base_url type = %#v, want string", toolName, baseURLSchema["type"])
+	}
+	description, ok := baseURLSchema["description"].(string)
+	if !ok {
+		t.Fatalf("tool %q base_url description missing or not a string", toolName)
+	}
+	for _, expected := range []string{"server URL", "without /api", "https://abs.example.com/abs"} {
+		if !strings.Contains(description, expected) {
+			t.Fatalf("tool %q base_url description %q missing %q", toolName, description, expected)
+		}
+	}
+
+	if _, ok := registered.Tool.InputSchema.Properties["token"]; !ok {
+		t.Fatalf("tool %q input schema missing token", toolName)
+	}
+	for _, required := range registered.Tool.InputSchema.Required {
+		if required == "base_url" || required == "token" {
+			t.Fatalf("tool %q should not require %q because env vars may provide it", toolName, required)
+		}
+	}
+}
+
+func TestRegisteredABSAuthSchemaDocumentsServerURL(t *testing.T) {
+	s := newMCPServer()
+	assertRegisteredABSAuthSchema(t, s, "libraries")
+	assertRegisteredABSAuthSchema(t, s, "ping")
+}
+
+func TestRegisteredToolsNormalizeBaseURLRouting(t *testing.T) {
+	tests := []struct {
+		name         string
+		toolName     string
+		baseURL      func(*recordingServer) string
+		useEnv       bool
+		expectedPath string
+	}{
+		{
+			name:         "api tool plain server URL",
+			toolName:     "libraries",
+			baseURL:      func(rs *recordingServer) string { return rs.URL },
+			expectedPath: "/api/libraries",
+		},
+		{
+			name:         "api tool trailing slash",
+			toolName:     "libraries",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "///" },
+			expectedPath: "/api/libraries",
+		},
+		{
+			name:         "api tool api suffix",
+			toolName:     "libraries",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/api/" },
+			expectedPath: "/api/libraries",
+		},
+		{
+			name:         "api tool reverse proxy base path",
+			toolName:     "libraries",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/abs" },
+			expectedPath: "/abs/api/libraries",
+		},
+		{
+			name:         "api tool reverse proxy base path api suffix",
+			toolName:     "libraries",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/abs/api/" },
+			expectedPath: "/abs/api/libraries",
+		},
+		{
+			name:         "api tool env var api suffix",
+			toolName:     "libraries",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/api/" },
+			useEnv:       true,
+			expectedPath: "/api/libraries",
+		},
+		{
+			name:         "root tool plain server URL",
+			toolName:     "ping",
+			baseURL:      func(rs *recordingServer) string { return rs.URL },
+			expectedPath: "/ping",
+		},
+		{
+			name:         "root tool trailing slash",
+			toolName:     "ping",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "///" },
+			expectedPath: "/ping",
+		},
+		{
+			name:         "root tool api suffix",
+			toolName:     "ping",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/api/" },
+			expectedPath: "/ping",
+		},
+		{
+			name:         "root tool reverse proxy base path",
+			toolName:     "ping",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/abs" },
+			expectedPath: "/abs/ping",
+		},
+		{
+			name:         "root tool reverse proxy base path api suffix",
+			toolName:     "ping",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/abs/api/" },
+			expectedPath: "/abs/ping",
+		},
+		{
+			name:         "root tool env var api suffix",
+			toolName:     "ping",
+			baseURL:      func(rs *recordingServer) string { return rs.URL + "/api/" },
+			useEnv:       true,
+			expectedPath: "/ping",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newMCPServer()
+			recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+				if !requireMethod(w, r, http.MethodGet) {
+					return
+				}
+				if r.URL.Path != tt.expectedPath {
+					http.NotFound(w, r)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			})
+			defer recorder.Close()
+
+			params := map[string]interface{}{
+				"token": "test-token",
+			}
+			baseURL := tt.baseURL(recorder)
+			if tt.useEnv {
+				t.Setenv("ABS_BASE_URL", baseURL)
+			} else {
+				params["base_url"] = baseURL
+			}
+
+			result := callRegisteredTool(t, s, tt.toolName, params)
+			if result.IsError {
+				t.Fatalf("expected tool success, got error result: %#v", result)
+			}
+
+			recorded, ok := recorder.LastRequest()
+			if !ok {
+				t.Fatal("expected recorded request")
+			}
+			if recorded.Method != http.MethodGet {
+				t.Fatalf("expected GET request, got %s", recorded.Method)
+			}
+			if recorded.Path != tt.expectedPath {
+				t.Fatalf("expected path %q, got %q", tt.expectedPath, recorded.Path)
+			}
+			if recorded.RawQuery != "" {
+				t.Fatalf("expected empty query, got %q", recorded.RawQuery)
+			}
+			if len(recorded.Body) != 0 {
+				t.Fatalf("expected empty GET body, got %q", string(recorded.Body))
+			}
+		})
+	}
+}
+
+func toolResultText(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	if result == nil || len(result.Content) == 0 {
+		t.Fatalf("expected text content, got %#v", result)
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	return textContent.Text
+}
+
+func TestRegisteredBaseURLValidationErrors(t *testing.T) {
+	tests := []struct {
+		name                  string
+		toolName              string
+		params                map[string]interface{}
+		envBaseURL            string
+		envToken              string
+		expectedErrorContains string
+	}{
+		{
+			name:     "api tool rejects URL without scheme",
+			toolName: "libraries",
+			params: map[string]interface{}{
+				"base_url": "abs.example.com",
+				"token":    "test-token",
+			},
+			expectedErrorContains: "absolute http(s) URL",
+		},
+		{
+			name:     "api tool rejects non-http scheme",
+			toolName: "libraries",
+			params: map[string]interface{}{
+				"base_url": "ftp://abs.example.com",
+				"token":    "test-token",
+			},
+			expectedErrorContains: "http or https",
+		},
+		{
+			name:     "api tool reports missing base URL",
+			toolName: "libraries",
+			params: map[string]interface{}{
+				"token": "test-token",
+			},
+			expectedErrorContains: "base_url parameter or ABS_BASE_URL",
+		},
+		{
+			name:     "root tool reports missing token",
+			toolName: "ping",
+			params: map[string]interface{}{
+				"base_url": "http://example.invalid",
+			},
+			expectedErrorContains: "token parameter or ABS_API_KEY",
+		},
+		{
+			name:     "root tool rejects URL without scheme",
+			toolName: "ping",
+			params: map[string]interface{}{
+				"base_url": "abs.example.com",
+				"token":    "test-token",
+			},
+			expectedErrorContains: "absolute http(s) URL",
+		},
+		{
+			name:     "root tool rejects non-http scheme from env",
+			toolName: "ping",
+			params: map[string]interface{}{
+				"token": "test-token",
+			},
+			envBaseURL:            "ftp://abs.example.com",
+			expectedErrorContains: "http or https",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ABS_BASE_URL", tt.envBaseURL)
+			t.Setenv("ABS_API_KEY", tt.envToken)
+			result := callRegisteredTool(t, newMCPServer(), tt.toolName, tt.params)
+			if !result.IsError {
+				t.Fatalf("expected validation error, got success: %#v", result)
+			}
+			if text := toolResultText(t, result); !strings.Contains(text, tt.expectedErrorContains) {
+				t.Fatalf("expected error %q to contain %q", text, tt.expectedErrorContains)
+			}
+		})
+	}
+}
+
+func TestRegisteredConfigValidationSkipsHTTPRequest(t *testing.T) {
+	recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server should not be called when token is missing")
+	})
+	defer recorder.Close()
+
+	result := callRegisteredTool(t, newMCPServer(), "ping", map[string]interface{}{
+		"base_url": recorder.URL + "/api/",
+	})
+	if !result.IsError {
+		t.Fatal("expected missing token to return a tool error")
+	}
+	if requests := recorder.Requests(); len(requests) != 0 {
+		t.Fatalf("expected no outbound request, got %d", len(requests))
+	}
+}
+
+func TestRegisteredABSNon2xxResponsesReturnToolErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		path     string
+	}{
+		{name: "api tool", toolName: "libraries", path: "/api/libraries"},
+		{name: "root tool", toolName: "ping", path: "/ping"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := newRecordingServer(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tt.path {
+					http.NotFound(w, r)
+					return
+				}
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			})
+			defer recorder.Close()
+
+			result := callRegisteredTool(t, newMCPServer(), tt.toolName, map[string]interface{}{
+				"base_url": recorder.URL,
+				"token":    "test-token",
+			})
+			if !result.IsError {
+				t.Fatalf("expected non-2xx response to return tool error, got %#v", result)
+			}
+			recorded, ok := recorder.LastRequest()
+			if !ok {
+				t.Fatal("expected recorded request")
+			}
+			if recorded.Path != tt.path {
+				t.Fatalf("expected path %q, got %q", tt.path, recorded.Path)
+			}
+		})
+	}
+}
+
 func TestEndpointHandlers(t *testing.T) {
 	mockServer := setupMockABSServer()
 	defer mockServer.Close()
