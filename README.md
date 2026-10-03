@@ -342,7 +342,7 @@ To add a new tool:
 
 ## License
 
-GNU General Public
+GNU General Public License v3.0 — see [LICENSE](LICENSE).
 
 ## Contributing
 
