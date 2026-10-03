@@ -48,7 +48,7 @@ cp .env.example .env   # set ABS_BASE_URL and ABS_API_KEY
 docker compose up -d --build
 ```
 
-Transport settings (optional environment variables): `MCP_TRANSPORT` (`stdio` default outside Docker, `http` in the image), `MCP_ADDR` (default `:8080`), `MCP_ENDPOINT` (default `/mcp`), and `MCP_PORT` for the published host port in compose.
+`MCP_PORT` sets the published host port in compose.
 
 Example client configuration:
 
@@ -117,6 +117,8 @@ export ABS_API_KEY="your-api-token-here"
 ```
 
 Alternatively, you can pass these as parameters when calling tools (see Tool Parameters below).
+
+Transport settings (optional): `MCP_TRANSPORT` (`stdio` by default, `http` for the streamable HTTP transport), `MCP_ADDR` (listen address for `http`, default `:8080`), and `MCP_ENDPOINT` (endpoint path for `http`, default `/mcp`).
 
 ### Setting Up with Witsy
 
