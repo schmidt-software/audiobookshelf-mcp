@@ -10,11 +10,14 @@ A Model Context Protocol (MCP) server that provides tools to interact with your 
 
 ## Features
 
-- List and retrieve libraries with optional sub-resources (items, authors)
-- Get individual items (audiobooks or podcasts)
-- Browse authors and their works
-- Access collections and playlists
-- Retrieve user information
+- List and retrieve libraries with optional sub-resources (items, authors, series, search, stats, …)
+- Get individual items (audiobooks or podcasts), including cover images as MCP image content
+- Browse authors (with author images), series, tags, and genres
+- Create and manage collections and playlists
+- Browse podcasts, fetch RSS feed metadata, parse OPML, and check for new episodes
+- Read and update listening progress
+- Inspect users, playback sessions, server status, backups, and filesystem paths
+- Run over stdio or the MCP streamable HTTP transport (Docker image included)
 
 ## Installation
 
@@ -53,6 +56,8 @@ Example client configuration:
 { "mcpServers": { "audiobookshelf": { "url": "http://localhost:8080/mcp" } } }
 ```
 
+> **Security:** The HTTP endpoint has no authentication of its own. Anyone who can reach it can call every tool with the permissions of the configured `ABS_API_KEY`. Do not expose the port to untrusted networks; bind it to localhost (for example `127.0.0.1:8080:8080` in `docker-compose.yml`) or put it behind an authenticating reverse proxy.
+
 ### Pre-built Releases (once published)
 
 This repository does not currently publish release downloads. Once releases are available, download the appropriate archive for your platform from the [latest release](https://github.com/schmidt-software/audiobookshelf-mcp/releases/latest). Archive names may vary by release.
@@ -86,9 +91,19 @@ The MCP server requires two pieces of configuration:
 
 ### Getting Your API Token
 
+**Audiobookshelf v2.26.0 and later (recommended):**
+
+1. Log into your Audiobookshelf instance as an admin
+2. Go to Settings → API Keys
+3. Create a new API key, assign it to a user, and copy the key (it is only shown once)
+
+**Older Audiobookshelf versions:**
+
 1. Log into your Audiobookshelf instance
 2. Go to Settings → Users → Your User
-3. Click "Generate API Token" or copy your existing token
+3. Copy the API token shown for the user
+
+The MCP server can only do what the user behind the key is allowed to do. Some tools (for example `users`, `backups`, `create_backup`, `create_library`, and `filesystem`) require an admin user.
 
 ## Usage
 
@@ -180,6 +195,13 @@ Add this to your Claude Desktop configuration file:
 - **author** - Get a single author by ID
 - **author_image** - Get an author's image by ID as MCP image content
 
+### Series, Tags, and Genres
+
+- **series** - Get a single series by ID
+  - Required: `series_id`
+- **tags** - List all tags
+- **genres** - List all genres
+
 ### Collections
 
 - **collections** - List all collections
@@ -211,6 +233,15 @@ Add this to your Claude Desktop configuration file:
   - `progress_item_id=<id>` - Get progress for a specific library item
   - `progress_item_id=<id>` + `progress_episode_id=<id>` - Get progress for a specific episode
 
+### Users
+
+- **users** - List all users
+- **users_online** - List currently online users
+- **user** - Get a single user by ID, or fetch specific user sub-resources:
+  - Required: `user_id`
+  - `listening-sessions=true` - Get listening sessions for the user
+  - `listening-stats=true` - Get listening statistics for the user
+
 ### Sessions
 
 - **sessions** - List all playback sessions
@@ -239,7 +270,15 @@ Add this to your Claude Desktop configuration file:
 
 ### Backups
 
+- **backups** - List all server backups
 - **create_backup** - Create a server backup
+
+### Server
+
+- **ping** - Simple health check (`GET /ping`)
+- **healthcheck** - Server health verification (`GET /healthcheck`)
+- **status** - Server initialization status and configuration (`GET /status`)
+- **filesystem** - List filesystem paths available to the server
 
 ## Tool Parameters
 
@@ -279,22 +318,31 @@ The AI assistant will use the appropriate MCP tools to fetch information and man
 
 ### Project Structure
 
-- `main.go` - Main server implementation
-- Helper functions for API authentication and request handling
-- MCP tool definitions and handlers
+- `main.go` - Server implementation: Audiobookshelf HTTP helpers (`absGET`, `absPOST`, `absPATCH`, …), handler factories, tool definitions in `newMCPServer()`, and transport selection in `main()`
+- `*_test.go` - Tests against mock Audiobookshelf servers (`httptest`), including tests that call tools through the registered MCP server
+- `Dockerfile`, `docker-compose.yml`, `.env.example` - Container image and Compose setup for the HTTP transport
+- `.github/workflows/main.yaml` - CI: runs tests and builds on pushes to `main` and on pull requests; publishes releases via GoReleaser on `v*` tags
+
+### Running Tests
+
+```bash
+go vet ./...
+go test ./...
+```
 
 ### Adding New Tools
 
 To add a new tool:
 
-1. Define the tool options using `mcp.NewTool()`
+1. Define the tool options in `newMCPServer()` using `mcp.NewTool()`
 2. Add authentication parameters with `withABSAuth()`
 3. Register the tool with `s.AddTool()`
-4. Use helper functions like `createSimpleGETHandler()` or `createGETByIDHandler()`
+4. Use helper functions like `createSimpleGETHandler()`, `createGETByIDHandler()`, `createGETByIDWithSubResourceHandler()`, or `createSimplePOSTHandler()`
+5. Add tests that call the registered tool (see `callRegisteredTool()` and `newRecordingServer()` in `main_test.go`) and document the tool in this README
 
 ## License
 
-GNU General Public
+GNU General Public License v3.0 — see [LICENSE](LICENSE).
 
 ## Contributing
 
