@@ -63,7 +63,7 @@ A Model Context Protocol (MCP) server that provides tools to interact with your 
 If you prefer to build from source:
 
 **Prerequisites:**
-- Go 1.21 or later
+- Go 1.25.2 or later
 
 ```bash
 git clone https://github.com/schmidt-software/audiobookshelf-mcp.git
