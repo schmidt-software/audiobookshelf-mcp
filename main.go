@@ -869,8 +869,8 @@ func newMCPServer() *server.MCPServer {
 			payload["duration"] = duration
 		}
 
-		if isFinished := request.GetBool("is_finished", false); isFinished {
-			payload["isFinished"] = true
+		if _, ok := request.GetArguments()["is_finished"]; ok {
+			payload["isFinished"] = request.GetBool("is_finished", false)
 		}
 
 		path := fmt.Sprintf("/me/progress/%s", itemID)
