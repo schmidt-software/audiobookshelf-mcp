@@ -56,6 +56,8 @@ Example client configuration:
 { "mcpServers": { "audiobookshelf": { "url": "http://localhost:8080/mcp" } } }
 ```
 
+> **Security:** The HTTP endpoint has no authentication of its own. Anyone who can reach it can call every tool with the permissions of the configured `ABS_API_KEY`. Do not expose the port to untrusted networks; bind it to localhost (for example `127.0.0.1:8080:8080` in `docker-compose.yml`) or put it behind an authenticating reverse proxy.
+
 ### Pre-built Releases (once published)
 
 This repository does not currently publish release downloads. Once releases are available, download the appropriate archive for your platform from the [latest release](https://github.com/schmidt-software/audiobookshelf-mcp/releases/latest). Archive names may vary by release.
