@@ -41,22 +41,7 @@ go build -o abs-mcp .
 
 ### Docker Compose
 
-The server can run as a container exposing the MCP streamable HTTP transport (`http://localhost:8080/mcp`).
-
-```bash
-cp .env.example .env   # set ABS_BASE_URL and ABS_API_KEY
-docker compose up -d --build
-```
-
-`MCP_PORT` sets the published host port in compose.
-
-Example client configuration:
-
-```json
-{ "mcpServers": { "audiobookshelf": { "url": "http://localhost:8080/mcp" } } }
-```
-
-> **Security:** The HTTP endpoint has no authentication of its own. Anyone who can reach it can call every tool with the permissions of the configured `ABS_API_KEY`. Do not expose the port to untrusted networks; bind it to localhost (for example `127.0.0.1:8080:8080` in `docker-compose.yml`) or put it behind an authenticating reverse proxy.
+The server can also run as a container that exposes the MCP streamable HTTP transport at `http://localhost:8080/mcp`. See [Running with Docker Compose](#running-with-docker-compose) for setup and configuration.
 
 ### Pre-built Releases (once published)
 
@@ -162,6 +147,129 @@ Add this to your Claude Desktop configuration file:
     }
   }
 }
+```
+
+## Running with Docker Compose
+
+The repository ships a `Dockerfile` and a `docker-compose.yml` that run the server with the MCP **streamable HTTP** transport instead of stdio. Use this to run the server permanently, for example next to your Audiobookshelf instance, and connect MCP clients over HTTP.
+
+### Prerequisites
+
+- Docker with the Compose plugin (`docker compose`)
+- An Audiobookshelf URL that is reachable **from inside the container** (see [Reaching Audiobookshelf from the container](#reaching-audiobookshelf-from-the-container))
+- An Audiobookshelf API key (see [Getting Your API Token](#getting-your-api-token))
+
+### Quick Start
+
+```bash
+git clone https://github.com/schmidt-software/audiobookshelf-mcp.git
+cd audiobookshelf-mcp
+cp .env.example .env
+# edit .env and set ABS_BASE_URL and ABS_API_KEY
+docker compose up -d --build
+```
+
+Check that the server is running:
+
+```bash
+docker compose ps
+docker compose logs abs-mcp   # should print: Listening on :8080/mcp
+```
+
+The MCP endpoint is now available at `http://localhost:8080/mcp`.
+
+### Environment Variables
+
+Compose reads these variables from the `.env` file next to `docker-compose.yml` (the file is ignored by git):
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ABS_BASE_URL` | yes | – | Audiobookshelf server URL without `/api`, as seen from the container |
+| `ABS_API_KEY` | yes | – | Audiobookshelf API key |
+| `MCP_PORT` | no | `8080` | Host port that publishes the MCP endpoint |
+
+If a required variable is missing, `docker compose` refuses to start, for example: `required variable ABS_BASE_URL is missing a value: set ABS_BASE_URL`.
+
+The image sets `MCP_TRANSPORT=http` and `MCP_ADDR=:8080`. The endpoint path can be changed with `MCP_ENDPOINT` (default `/mcp`); see [Customizing the setup](#customizing-the-setup).
+
+### Reaching Audiobookshelf from the Container
+
+`localhost` inside the container refers to the container itself, not to your host. Choose `ABS_BASE_URL` depending on where Audiobookshelf runs:
+
+- **Remote server or reverse proxy:** use its public URL, e.g. `https://abs.example.com`.
+- **Directly on the Docker host:** with Docker Desktop (macOS/Windows) use `http://host.docker.internal:<port>`. On Linux, additionally map that name to the host in a `docker-compose.override.yml`:
+
+  ```yaml
+  services:
+    abs-mcp:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+  ```
+
+- **Audiobookshelf in another Docker container:** attach `abs-mcp` to the Docker network of the Audiobookshelf container and use its container name, e.g. `ABS_BASE_URL=http://audiobookshelf:80` (use the port Audiobookshelf listens on *inside* its container). Find the network name with `docker network ls`, then add a `docker-compose.override.yml`:
+
+  ```yaml
+  services:
+    abs-mcp:
+      networks:
+        - audiobookshelf
+  networks:
+    audiobookshelf:
+      external: true
+      name: audiobookshelf_default   # name of the existing network
+  ```
+
+### Customizing the Setup
+
+Docker Compose automatically merges a `docker-compose.override.yml` placed next to `docker-compose.yml`, so you can adapt the setup without editing the tracked file. For example, to publish the endpoint on localhost only and serve it under a different path:
+
+```yaml
+services:
+  abs-mcp:
+    environment:
+      MCP_ENDPOINT: /audiobookshelf/mcp
+    ports: !override
+      - "127.0.0.1:${MCP_PORT:-8080}:8080"
+```
+
+The `!override` tag replaces the published ports instead of adding to them and requires Docker Compose v2.24.4 or later.
+
+After changing the configuration, apply it with `docker compose up -d`.
+
+> **Security:** The HTTP endpoint has no authentication of its own. Anyone who can reach it can call every tool with the permissions of the configured `ABS_API_KEY`. The default `docker-compose.yml` publishes the port on all host interfaces. Do not expose it to untrusted networks; bind it to localhost as shown above or put it behind an authenticating reverse proxy.
+
+### Connecting MCP Clients
+
+Point clients that support the streamable HTTP transport at the endpoint URL:
+
+```json
+{
+  "mcpServers": {
+    "audiobookshelf": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+The exact configuration format depends on the client. Clients that only support stdio need a stdio-to-HTTP bridge, or can use the native binary as described in [Usage](#usage) instead.
+
+To check the endpoint manually, send an MCP `initialize` request; the server answers with HTTP 200:
+
+```bash
+curl -i http://localhost:8080/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
+```
+
+### Updating and Stopping
+
+```bash
+git pull
+docker compose up -d --build   # rebuild and restart with the latest code
+
+docker compose down            # stop and remove the container
 ```
 
 ## Available Tools
