@@ -91,3 +91,45 @@ func TestPodcastsFeedUsesSupportedRoute(t *testing.T) {
 		t.Fatal("expected test server to be called")
 	}
 }
+
+func TestPodcastsOPMLUsesSupportedParseRoute(t *testing.T) {
+	called := false
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodPost {
+			t.Errorf("expected method %s, got %s", http.MethodPost, r.Method)
+		}
+		if r.URL.Path != "/api/podcasts/opml/parse" {
+			t.Errorf("expected path /api/podcasts/opml/parse, got %s", r.URL.Path)
+		}
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		if got := payload["opmlText"]; got != "<opml></opml>" {
+			t.Errorf("expected opmlText payload, got %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}))
+	defer testServer.Close()
+
+	result, err := handlePodcasts(context.Background(), makeRequest(map[string]interface{}{
+		"base_url":  testServer.URL,
+		"token":     "test-token",
+		"opml":      true,
+		"opml_text": "<opml></opml>",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected result, got nil")
+	}
+	if result.IsError {
+		t.Fatalf("result returned error: %v", result)
+	}
+	if !called {
+		t.Fatal("expected test server to be called")
+	}
+}

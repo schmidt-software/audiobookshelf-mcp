@@ -511,12 +511,21 @@ func handlePodcasts(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 		return mcp.NewToolResultText(string(body)), nil
 	}
 
-	path := "/podcasts"
 	if request.GetBool("opml", false) {
-		path = "/podcasts/opml"
+		opmlText, err := request.RequireString("opml_text")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		body, err := absPOST(ctx, baseURL, token, "/podcasts/opml/parse", map[string]interface{}{"opmlText": opmlText})
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return mcp.NewToolResultText(string(body)), nil
 	}
 
-	body, err := absGET(ctx, baseURL, token, path)
+	body, err := absGET(ctx, baseURL, token, "/podcasts")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -636,7 +645,8 @@ func newMCPServer() *server.MCPServer {
 		mcp.WithDescription("List all podcasts, fetch RSS feed metadata, or fetch podcast-related resources"),
 		mcp.WithBoolean("feed", mcp.Description("Fetch podcast feed metadata using POST /podcasts/feed")),
 		mcp.WithString("rss_feed", mcp.Description("RSS feed URL (required when feed is true)")),
-		mcp.WithBoolean("opml", mcp.Description("Get podcast OPML export")),
+		mcp.WithBoolean("opml", mcp.Description("Parse OPML text using POST /podcasts/opml/parse")),
+		mcp.WithString("opml_text", mcp.Description("OPML XML text (required when opml is true)")),
 	)
 	podcastsTool := mcp.NewTool("podcasts", podcastsOpts...)
 
