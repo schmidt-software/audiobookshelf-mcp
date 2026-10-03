@@ -3,3 +3,4 @@
 .DS_Store
 abs-mcp
 .github/.DS_Store
+.env
