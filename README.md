@@ -172,12 +172,13 @@ Add this to your Claude Desktop configuration file:
 ### Items
 
 - **item** - Get a single item (audiobook or podcast) by ID, or fetch specific item sub-resources:
-  - `cover=true` - Get the cover image for the item
+  - `cover=true` - Get the cover image for the item as MCP image content
   - `tone-object=true` - Get the tone object for the item
 
 ### Authors
 
 - **author** - Get a single author by ID
+- **author_image** - Get an author's image by ID as MCP image content
 
 ### Collections
 

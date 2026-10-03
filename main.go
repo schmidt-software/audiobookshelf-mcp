@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -159,8 +161,35 @@ func createGETByIDHandler(pathTemplate, idParamName string) func(context.Context
 	}
 }
 
+// Helper to create a GET handler with an ID parameter that can return MCP image content.
+func createGETByIDImageHandler(pathTemplate, idParamName string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		baseURL, token, err := getABSConfig(request)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		id, err := request.RequireString(idParamName)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		response, err := absGETRaw(ctx, baseURL, token, fmt.Sprintf(pathTemplate, id))
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		return newBinaryAwareToolResult(response), nil
+	}
+}
+
 // Helper to create a GET handler with ID and optional sub-resource
 func createGETByIDWithSubResourceHandler(basePath, idParamName string, subResources []string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return createGETByIDWithBinarySubResourceHandler(basePath, idParamName, subResources, nil)
+}
+
+// Helper to create a GET handler with ID and optional sub-resource, with optional binary image sub-resources.
+func createGETByIDWithBinarySubResourceHandler(basePath, idParamName string, subResources []string, binarySubResources map[string]bool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		baseURL, token, err := getABSConfig(request)
 		if err != nil {
@@ -174,11 +203,21 @@ func createGETByIDWithSubResourceHandler(basePath, idParamName string, subResour
 
 		// Build the path - check if any sub-resource is requested
 		path := fmt.Sprintf(basePath, id)
+		binaryResult := false
 		for _, subResource := range subResources {
 			if request.GetBool(subResource, false) {
 				path = fmt.Sprintf("%s/%s", path, subResource)
+				binaryResult = binarySubResources[subResource]
 				break // Only one sub-resource at a time
 			}
+		}
+
+		if binaryResult {
+			response, err := absGETRaw(ctx, baseURL, token, path)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return newBinaryAwareToolResult(response), nil
 		}
 
 		body, err := absGET(ctx, baseURL, token, path)
@@ -295,7 +334,20 @@ func createPodcastHandler() func(context.Context, mcp.CallToolRequest) (*mcp.Cal
 	}
 }
 
+type absResponse struct {
+	Body        []byte
+	ContentType string
+}
+
 func absGET(ctx context.Context, baseURL, token, path string) ([]byte, error) {
+	response, err := absGETRaw(ctx, baseURL, token, path)
+	if err != nil {
+		return nil, err
+	}
+	return response.Body, nil
+}
+
+func absGETRaw(ctx context.Context, baseURL, token, path string) (*absResponse, error) {
 	fullURL := strings.TrimSuffix(baseURL, "/") + path
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
@@ -323,7 +375,38 @@ func absGET(ctx context.Context, baseURL, token, path string) ([]byte, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	return body, nil
+	return &absResponse{
+		Body:        body,
+		ContentType: resp.Header.Get("Content-Type"),
+	}, nil
+}
+
+func newBinaryAwareToolResult(response *absResponse) *mcp.CallToolResult {
+	mimeType := imageMIMEType(response.ContentType, response.Body)
+	if mimeType == "" {
+		return mcp.NewToolResultText(string(response.Body))
+	}
+
+	return mcp.NewToolResultImage("Image response", base64.StdEncoding.EncodeToString(response.Body), mimeType)
+}
+
+func imageMIMEType(contentType string, body []byte) string {
+	mimeType := strings.TrimSpace(contentType)
+	if mimeType != "" {
+		if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
+			mimeType = parsed
+		} else if beforeParams, _, ok := strings.Cut(mimeType, ";"); ok {
+			mimeType = strings.TrimSpace(beforeParams)
+		}
+	}
+	if mimeType == "" {
+		mimeType = http.DetectContentType(body)
+	}
+	mimeType = strings.ToLower(mimeType)
+	if !strings.HasPrefix(mimeType, "image/") {
+		return ""
+	}
+	return mimeType
 }
 
 func absPOST(ctx context.Context, baseURL, token, path string, payload interface{}) ([]byte, error) {
@@ -456,7 +539,7 @@ func newMCPServer() *server.MCPServer {
 	itemOpts := append(withABSAuth(),
 		mcp.WithDescription("Retrieve a single Audiobookshelf item (audiobook or podcast) by ID, optionally with sub-resources"),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item identifier to fetch")),
-		mcp.WithBoolean("cover", mcp.Description("Include cover image for the item")),
+		mcp.WithBoolean("cover", mcp.Description("Return the cover image for the item as MCP image content")),
 		mcp.WithBoolean("tone-object", mcp.Description("Include tone object for the item")),
 	)
 	itemTool := mcp.NewTool("item", itemOpts...)
@@ -616,7 +699,7 @@ func newMCPServer() *server.MCPServer {
 
 	// Author image tool
 	authorImageOpts := append(withABSAuth(),
-		mcp.WithDescription("Retrieve author image by ID"),
+		mcp.WithDescription("Retrieve an author image by ID as MCP image content"),
 		mcp.WithString("author_id", mcp.Required(), mcp.Description("Author identifier")),
 	)
 	authorImageTool := mcp.NewTool("author_image", authorImageOpts...)
@@ -697,10 +780,10 @@ func newMCPServer() *server.MCPServer {
 	})
 
 	// Add ABS Items handlers
-	s.AddTool(itemTool, createGETByIDWithSubResourceHandler("/items/%s", "item_id", []string{
+	s.AddTool(itemTool, createGETByIDWithBinarySubResourceHandler("/items/%s", "item_id", []string{
 		"cover",
 		"tone-object",
-	}))
+	}, map[string]bool{"cover": true}))
 
 	// Add ABS Authors handlers
 	s.AddTool(authorTool, createGETByIDHandler("/authors/%s", "author_id"))
@@ -991,7 +1074,7 @@ func newMCPServer() *server.MCPServer {
 	s.AddTool(seriesTool, createGETByIDHandler("/series/%s", "series_id"))
 
 	// Add Author image handler
-	s.AddTool(authorImageTool, createGETByIDHandler("/authors/%s/image", "author_id"))
+	s.AddTool(authorImageTool, createGETByIDImageHandler("/authors/%s/image", "author_id"))
 
 	// Add Backups handler
 	s.AddTool(backupsTool, createSimpleGETHandler("/backups"))
