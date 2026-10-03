@@ -89,9 +89,19 @@ The MCP server requires two pieces of configuration:
 
 ### Getting Your API Token
 
+**Audiobookshelf v2.26.0 and later (recommended):**
+
+1. Log into your Audiobookshelf instance as an admin
+2. Go to Settings → API Keys
+3. Create a new API key, assign it to a user, and copy the key (it is only shown once)
+
+**Older Audiobookshelf versions:**
+
 1. Log into your Audiobookshelf instance
 2. Go to Settings → Users → Your User
-3. Click "Generate API Token" or copy your existing token
+3. Copy the API token shown for the user
+
+The MCP server can only do what the user behind the key is allowed to do. Some tools (for example `users`, `backups`, `create_backup`, `create_library`, and `filesystem`) require an admin user.
 
 ## Usage
 
