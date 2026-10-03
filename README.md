@@ -161,6 +161,8 @@ Add this to your Claude Desktop configuration file:
   - `personalized=true` - Get personalized view for the library
   - `filterdata=true` - Get filter data for the library
   - `stats=true` - Get library statistics
+  - `search=true` + `query=<text>` - Search library items
+  - Optional with search: `limit=<number>` - Limit the number of search results
   - `episode-downloads=true` - Get episode downloads for the library
   - `recent-episodes=true` - Get recent episodes for the library
 - **create_library** - Create a new library
@@ -220,7 +222,7 @@ Add this to your Claude Desktop configuration file:
   - `opml=true` - Get podcast OPML export
 - **podcast** - Get a single podcast by ID, or fetch podcast sub-resources:
   - `downloads=true` - Get downloads for the podcast
-  - `search-episode=true` - Search for episodes in the podcast
+  - `search-episode=true` + `title=<text>` - Search for episodes in the podcast
   - `episode_id=<id>` - Get a specific episode by ID
 - **check_podcast_episodes** - Check for new episodes for a podcast
   - Required: `podcast_id`
