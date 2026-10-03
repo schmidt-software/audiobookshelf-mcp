@@ -66,9 +66,9 @@ If you prefer to build from source:
 - Go 1.21 or later
 
 ```bash
-git clone <repository-url>
-cd abs-mcp
-go build
+git clone https://github.com/schmidt-software/audiobookshelf-mcp.git
+cd audiobookshelf-mcp
+go build -o abs-mcp .
 ```
 
 ### Docker Compose
