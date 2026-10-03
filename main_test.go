@@ -1,17 +1,100 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
+
+type recordedRequest struct {
+	Method   string
+	Path     string
+	RawQuery string
+	Body     []byte
+}
+
+type recordingServer struct {
+	*httptest.Server
+	mu       sync.Mutex
+	requests []recordedRequest
+}
+
+func newRecordingServer(handler http.HandlerFunc) *recordingServer {
+	rs := &recordingServer{}
+	rs.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		rs.mu.Lock()
+		rs.requests = append(rs.requests, recordedRequest{
+			Method:   r.Method,
+			Path:     r.URL.Path,
+			RawQuery: r.URL.RawQuery,
+			Body:     append([]byte(nil), body...),
+		})
+		rs.mu.Unlock()
+
+		handler(w, r)
+	}))
+	return rs
+}
+
+func (rs *recordingServer) Requests() []recordedRequest {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	requests := make([]recordedRequest, len(rs.requests))
+	copy(requests, rs.requests)
+	return requests
+}
+
+func (rs *recordingServer) LastRequest() (recordedRequest, bool) {
+	requests := rs.Requests()
+	if len(requests) == 0 {
+		return recordedRequest{}, false
+	}
+	return requests[len(requests)-1], true
+}
+
+func requireMethod(w http.ResponseWriter, r *http.Request, methods ...string) bool {
+	for _, method := range methods {
+		if r.Method == method {
+			return true
+		}
+	}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func callRegisteredTool(t *testing.T, s *server.MCPServer, name string, params map[string]interface{}) *mcp.CallToolResult {
+	t.Helper()
+	tool := s.GetTool(name)
+	if tool == nil {
+		t.Fatalf("tool %q is not registered", name)
+	}
+	request := makeRequest(params)
+	request.Params.Name = name
+	result, err := tool.Handler(context.Background(), request)
+	if err != nil {
+		t.Fatalf("tool %q returned protocol error: %v", name, err)
+	}
+	if result == nil {
+		t.Fatalf("tool %q returned nil result", name)
+	}
+	return result
+}
 
 // Mock server that simulates Audiobookshelf API
 func setupMockABSServer() *httptest.Server {
@@ -19,25 +102,37 @@ func setupMockABSServer() *httptest.Server {
 
 	// Server endpoints
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"success": "true"})
 	})
 
 	mux.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]bool{"healthy": true})
 	})
 
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"isInit": true,
+			"isInit":   true,
 			"language": "en-us",
 		})
 	})
 
 	// Libraries endpoints
 	mux.HandleFunc("/api/libraries", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
+			return
+		}
 		if r.Method == http.MethodPost {
 			// Handle POST - create library
 			var payload map[string]interface{}
@@ -76,6 +171,9 @@ func setupMockABSServer() *httptest.Server {
 	})
 
 	mux.HandleFunc("/api/libraries/", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/libraries/"), "/")
 		if len(parts) == 0 || parts[0] == "" {
 			http.Error(w, "Library ID required", http.StatusBadRequest)
@@ -88,7 +186,7 @@ func setupMockABSServer() *httptest.Server {
 			// Base library info
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": libraryID,
+				"id":   libraryID,
 				"name": "Test Library",
 			})
 			return
@@ -99,25 +197,31 @@ func setupMockABSServer() *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"libraryId": libraryID,
-			"resource": subResource,
-			"data": []interface{}{},
+			"resource":  subResource,
+			"data":      []interface{}{},
 		})
 	})
 
 	// Items endpoints
 	mux.HandleFunc("/api/items/", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		itemID := strings.TrimPrefix(r.URL.Path, "/api/items/")
 		parts := strings.Split(itemID, "/")
 
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": parts[0],
+			"id":   parts[0],
 			"type": "book",
 		})
 	})
 
 	// Authors endpoints
 	mux.HandleFunc("/api/authors/", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/api/authors/")
 		parts := strings.Split(path, "/")
 
@@ -129,23 +233,29 @@ func setupMockABSServer() *httptest.Server {
 
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": parts[0],
+			"id":   parts[0],
 			"name": "Test Author",
 		})
 	})
 
 	// Series endpoints
 	mux.HandleFunc("/api/series/", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		seriesID := strings.TrimPrefix(r.URL.Path, "/api/series/")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": seriesID,
+			"id":   seriesID,
 			"name": "Test Series",
 		})
 	})
 
 	// Users endpoints
 	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"users": []map[string]string{
@@ -155,6 +265,9 @@ func setupMockABSServer() *httptest.Server {
 	})
 
 	mux.HandleFunc("/api/users/online", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"users": []map[string]string{},
@@ -162,13 +275,16 @@ func setupMockABSServer() *httptest.Server {
 	})
 
 	mux.HandleFunc("/api/users/", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/api/users/")
 		parts := strings.Split(path, "/")
 
 		if len(parts) == 1 {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": parts[0],
+				"id":       parts[0],
 				"username": "testuser",
 			})
 			return
@@ -176,7 +292,7 @@ func setupMockABSServer() *httptest.Server {
 
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"userId": parts[0],
+			"userId":   parts[0],
 			"resource": parts[1],
 		})
 	})
@@ -185,7 +301,7 @@ func setupMockABSServer() *httptest.Server {
 	mux.HandleFunc("/api/me", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": "current-user",
+			"id":       "current-user",
 			"username": "me",
 		})
 	})
@@ -301,13 +417,16 @@ func setupMockABSServer() *httptest.Server {
 	mux.HandleFunc("/api/authorize", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"user": map[string]string{"id": "user1"},
+			"user":   map[string]string{"id": "user1"},
 			"server": map[string]string{"version": "2.0.0"},
 		})
 	})
 
 	// Tags endpoint
 	mux.HandleFunc("/api/tags", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"tags": []string{"fiction", "non-fiction"},
@@ -316,6 +435,9 @@ func setupMockABSServer() *httptest.Server {
 
 	// Genres endpoint
 	mux.HandleFunc("/api/genres", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"genres": []string{"Fantasy", "Science Fiction", "Mystery"},
@@ -337,32 +459,32 @@ func makeRequest(params map[string]interface{}) mcp.CallToolRequest {
 
 func TestGetEnvOrParam(t *testing.T) {
 	tests := []struct {
-		name      string
+		name       string
 		paramValue string
-		envKey    string
-		envValue  string
-		expected  string
+		envKey     string
+		envValue   string
+		expected   string
 	}{
 		{
-			name:      "prefer param over env",
+			name:       "prefer param over env",
 			paramValue: "param_value",
-			envKey:    "TEST_KEY",
-			envValue:  "env_value",
-			expected:  "param_value",
+			envKey:     "TEST_KEY",
+			envValue:   "env_value",
+			expected:   "param_value",
 		},
 		{
-			name:      "use env when param empty",
+			name:       "use env when param empty",
 			paramValue: "",
-			envKey:    "TEST_KEY",
-			envValue:  "env_value",
-			expected:  "env_value",
+			envKey:     "TEST_KEY",
+			envValue:   "env_value",
+			expected:   "env_value",
 		},
 		{
-			name:      "return empty when both empty",
+			name:       "return empty when both empty",
 			paramValue: "",
-			envKey:    "TEST_KEY",
-			envValue:  "",
-			expected:  "",
+			envKey:     "TEST_KEY",
+			envValue:   "",
+			expected:   "",
 		},
 	}
 
@@ -400,10 +522,10 @@ func TestGetABSConfig(t *testing.T) {
 			expectedURL: "https://abs.example.com/api",
 		},
 		{
-			name: "use env vars",
-			params: map[string]interface{}{},
-			envBaseURL: "https://env.example.com",
-			envToken: "env-token",
+			name:        "use env vars",
+			params:      map[string]interface{}{},
+			envBaseURL:  "https://env.example.com",
+			envToken:    "env-token",
 			expectError: false,
 			expectedURL: "https://env.example.com/api",
 		},
@@ -467,8 +589,8 @@ func TestABSGET(t *testing.T) {
 		checkBody   func([]byte) error
 	}{
 		{
-			name: "successful GET request",
-			path: "/ping",
+			name:        "successful GET request",
+			path:        "/ping",
 			expectError: false,
 			checkBody: func(body []byte) error {
 				if !strings.Contains(string(body), "success") {
@@ -478,8 +600,8 @@ func TestABSGET(t *testing.T) {
 			},
 		},
 		{
-			name: "libraries endpoint",
-			path: "/api/libraries",
+			name:        "libraries endpoint",
+			path:        "/api/libraries",
 			expectError: false,
 			checkBody: func(body []byte) error {
 				if !strings.Contains(string(body), "libraries") {
@@ -489,8 +611,8 @@ func TestABSGET(t *testing.T) {
 			},
 		},
 		{
-			name: "404 endpoint",
-			path: "/api/nonexistent",
+			name:        "404 endpoint",
+			path:        "/api/nonexistent",
 			expectError: true,
 		},
 	}
@@ -532,7 +654,7 @@ func TestEndpointHandlers(t *testing.T) {
 		checkResult func(*mcp.CallToolResult) error
 	}{
 		{
-			name: "libraries handler",
+			name:    "libraries handler",
 			handler: createSimpleGETHandler("/libraries"),
 			params: map[string]interface{}{
 				"base_url": baseURL,
@@ -547,7 +669,7 @@ func TestEndpointHandlers(t *testing.T) {
 			},
 		},
 		{
-			name: "library by ID handler",
+			name:    "library by ID handler",
 			handler: createGETByIDHandler("/libraries/%s", "library_id"),
 			params: map[string]interface{}{
 				"base_url":   baseURL,
@@ -563,7 +685,7 @@ func TestEndpointHandlers(t *testing.T) {
 			},
 		},
 		{
-			name: "author handler",
+			name:    "author handler",
 			handler: createGETByIDHandler("/authors/%s", "author_id"),
 			params: map[string]interface{}{
 				"base_url":  baseURL,
@@ -573,7 +695,7 @@ func TestEndpointHandlers(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "series handler",
+			name:    "series handler",
 			handler: createGETByIDHandler("/series/%s", "series_id"),
 			params: map[string]interface{}{
 				"base_url":  baseURL,
@@ -583,7 +705,7 @@ func TestEndpointHandlers(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "users handler",
+			name:    "users handler",
 			handler: createSimpleGETHandler("/users"),
 			params: map[string]interface{}{
 				"base_url": baseURL,
@@ -592,7 +714,7 @@ func TestEndpointHandlers(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "tags handler",
+			name:    "tags handler",
 			handler: createSimpleGETHandler("/tags"),
 			params: map[string]interface{}{
 				"base_url": baseURL,
@@ -601,7 +723,7 @@ func TestEndpointHandlers(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "genres handler",
+			name:    "genres handler",
 			handler: createSimpleGETHandler("/genres"),
 			params: map[string]interface{}{
 				"base_url": baseURL,
@@ -610,7 +732,7 @@ func TestEndpointHandlers(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "missing required ID parameter",
+			name:    "missing required ID parameter",
 			handler: createGETByIDHandler("/libraries/%s", "library_id"),
 			params: map[string]interface{}{
 				"base_url": baseURL,
@@ -696,9 +818,9 @@ func TestSubResourceHandlers(t *testing.T) {
 			idParamName:  "user_id",
 			subResources: []string{"listening-sessions", "listening-stats"},
 			params: map[string]interface{}{
-				"base_url":          baseURL,
-				"token":             "test-token",
-				"user_id":           "user123",
+				"base_url":           baseURL,
+				"token":              "test-token",
+				"user_id":            "user123",
 				"listening-sessions": true,
 			},
 			expectedInPath: "listening-sessions",
